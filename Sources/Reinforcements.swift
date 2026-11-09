@@ -20,6 +20,7 @@ extension Dogfight {
             let candidates = pool.isEmpty ? enemies : pool
             let target = candidates.min { simd_distance_squared(orbitPath(fighters[$0],time+5),f.entryPosition)<simd_distance_squared(orbitPath(fighters[$1],time+5),f.entryPosition) }
             f.attackTarget = target
+            f.targetReviewAt = max(time+1.5,f.entryTime+f.formationHold+3)
             if let target { used.insert(target) }
         }
     }

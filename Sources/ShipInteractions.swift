@@ -14,12 +14,13 @@ extension Dogfight {
     func shipAvoidance(_ f: Fighter, positions: [V3], velocities: [V3], active: [Bool], speed: inout Float) -> V3 {
         guard let index = fighters.firstIndex(where:{$0 === f}) else { return .zero }
         var steering = V3.zero
-        let horizon: Float = 3.5
         for j in fighters.indices where j != index && active[j] {
             let other = fighters[j]
+            let friendly = f.side == other.side
+            let horizon: Float = friendly ? 3.5 : 2.25
             let offset = positions[index]-positions[j], relative = velocities[index]-velocities[j]
             let distance = simd_length(offset)
-            let spacing = f.faction.collisionRadius+other.faction.collisionRadius+14
+            let spacing = f.faction.collisionRadius+other.faction.collisionRadius+(friendly ? 14 : 10)
             let relativeSquared = simd_length_squared(relative)
             let closestTime = relativeSquared>0.01 ? max(0,min(horizon,-simd_dot(offset,relative)/relativeSquared)) : 0
             guard distance<spacing*1.5+sqrt(relativeSquared)*horizon else { continue }
@@ -36,7 +37,7 @@ extension Dogfight {
                 steering += unit(lateral)*(0.8+urgency*4)*(1-miss/spacing)
                 // Brake when gaining on a ship ahead; never accelerate into its tail.
                 if simd_dot(unit(-offset),f.forward)>0.35 && closestTime<1.8 {
-                    speed = min(speed,max(f.cruiseSpeed*0.65,simd_length(f.velocity)-35))
+                    speed = min(speed,max(f.cruiseSpeed*(friendly ? 0.65 : 0.85),simd_length(f.velocity)-35))
                 }
             }
             if distance<spacing*1.5 {

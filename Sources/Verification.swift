@@ -3,8 +3,88 @@ import SceneKit
 import Metal
 import simd
 
+func combatBenchmark() {
+    for seed: UInt64 in [42,2026,51966] {
+        autoreleasepool {
+            let b = Dogfight(seed:seed,initialFactions:[.rebel,.empire],initialArrivals:false)
+            b.automatic = false
+            var activeSeconds: Float = 0
+            for _ in 0..<7200 { activeSeconds += Float(b.activeCount)/60; b.update(dt:1.0/60) }
+            print("COMBAT seed \(seed): \(b.shots) bolts, \(b.weaponHits) hits, \(b.destroyed) losses; \(b.shots == 0 ? 0 : Float(b.weaponHits)/Float(b.shots)) hit ratio; \(Float(b.shots)/max(1,activeSeconds)) bolts per active fighter-second; \(b.shipCollisions) ship collisions.")
+            fflush(stdout)
+        }
+    }
+}
+
+func renderPlanetReview(directory: URL) {
+    try! FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+    let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)
+    let scene = SCNScene(); scene.background.contents = color(0.002,0.004,0.009)
+    let camera = SCNNode(); camera.camera = SCNCamera()
+    camera.camera!.zNear = 0.1; camera.camera!.zFar = 12000; camera.camera!.fieldOfView = 45
+    camera.camera!.wantsHDR = true; camera.camera!.exposureOffset = 0.2
+    camera.camera!.wantsExposureAdaptation = false
+    renderer.scene = scene; renderer.pointOfView = camera; scene.rootNode.addChildNode(camera)
+    let sun = unit(V3(-0.4,0.3,0.86)), tangent = unit(simd_cross(sun,V3(0,1,0)))
+    for seed: UInt64 in [42,2026] {
+        let planet = ProceduralPlanet(seed:seed,radius:300,sun:sun)
+        scene.rootNode.addChildNode(planet.node)
+        for (name,degrees,time) in [("day",25.0,Float(0)),("terminator",80.0,0),("crescent",130.0,0),("night",165.0,0),("rotated",25.0,600)] {
+            let angle = Float(degrees)*Float.pi/180
+            camera.simdPosition = (sun*cos(angle)+tangent*sin(angle))*1050
+            camera.look(at:SCNVector3Zero)
+            planet.update(time:time)
+            let image = renderer.snapshot(atTime:Double(time),with:NSSize(width:1200,height:900),antialiasingMode:.multisampling4X)
+            let bitmap = NSBitmapImageRep(data:image.tiffRepresentation!)!
+            try! bitmap.representation(using:.png,properties:[:])!.write(to:directory.appendingPathComponent("planet-\(seed)-\(name).png"))
+            print("Rendered planet \(seed) \(name)"); fflush(stdout)
+            if seed == 42 && name == "day" {
+                for (layer,hideSurface,hideCloud,hideAtmosphere) in [("surface",false,true,true),("surface-clouds",false,false,true),("atmosphere",true,true,false)] {
+                    planet.surface.isHidden = hideSurface; planet.clouds.isHidden = hideCloud; planet.atmosphere.isHidden = hideAtmosphere
+                    let preview = renderer.snapshot(atTime:0,with:NSSize(width:1200,height:900),antialiasingMode:.multisampling4X)
+                    let pixels = NSBitmapImageRep(data:preview.tiffRepresentation!)!
+                    try! pixels.representation(using:.png,properties:[:])!.write(to:directory.appendingPathComponent("planet-42-layer-\(layer).png"))
+                }
+                planet.surface.isHidden = false; planet.clouds.isHidden = false; planet.atmosphere.isHidden = false
+            }
+        }
+        planet.node.removeFromParentNode()
+    }
+}
+
 private func check(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { print("FAIL: \(message)"); fflush(stdout); exit(1) }
+}
+
+private func distantSquadrons() -> Dogfight {
+    let b = Dogfight(seed:42,initialFactions:[.rebel,.empire],initialArrivals:false)
+    b.automatic = false; b.cameraIndex = 2
+    var slots = [0,0]
+    for f in b.fighters {
+        let slot = slots[f.side]; slots[f.side] += 1
+        let center = f.side == 0 ? V3(2500,500,-2100) : V3(-1900,900,2300)
+        let position = center+V3(Float(slot%3-1)*38,Float(slot/3)*22,Float(slot/3)*32)
+        b.activateFlight(f,position:position,forward:unit(-center),speed:50)
+    }
+    b.director.prepareShot(in:b); b.cut = true; b.updateCamera(0)
+    return b
+}
+
+private func verifyBattlefieldFraming() {
+    let b = distantSquadrons()
+    func readableShips() -> Int {
+        let forward = unit(b.cameraLook-b.cameraPosition)
+        return b.fighters.filter { f in
+            let to = f.position-b.cameraPosition, distance = simd_length(to)
+            return f.active && simd_dot(unit(to),forward)>cos(24*Float.pi/180) && f.faction.collisionRadius/distance>0.01
+        }.count
+    }
+    check(readableShips()>=6,"Battlefield camera did not frame a distant squadron at a readable size")
+    check(simd_length(b.cameraLook)>2000,"Battlefield camera remained locked to the empty asteroid belt")
+    let index = b.director.overviewSubject!
+    b.destroy(b.fighters[index]); b.updateCamera(1.0/60)
+    check(readableShips()>=5,"Battlefield view lost the ships when its subject was destroyed")
+    print("PASS: battlefield view frames readable ships thousands of units outside the belt, separates distant squadrons, and replaces destroyed subjects.")
 }
 
 private func verifyShipTraffic() {
@@ -133,7 +213,7 @@ private func verifyWeaponsAndMotion() {
                 guard f.active && old.3 && f.spin == nil && !old.4 && f.generation == old.5 else { continue }
                 check(simd_distance(f.velocity,old.1)<=f.accelerationLimit/60+0.001,"Unbounded flight acceleration")
                 check(simd_distance(f.position,old.0)<=215/60+0.001,"Flight teleported")
-                check(acos(max(-1,min(1,simd_dot(f.forward,old.2))))<=1.7/60+0.001,"Unbounded nose rotation")
+                check(acos(max(-1,min(1,simd_dot(f.forward,old.2))))<=f.turnRate/60+0.001,"Unbounded nose rotation")
                 check(simd_dot(unit(-f.node.simdWorldTransform.columns.2.xyz),unit(f.velocity))>0.9999,"Model nose does not follow velocity")
                 check(f.history.count<=120,"Unbounded camera flight history")
             }
@@ -166,22 +246,28 @@ private func verifyContinuousDeployments() {
             b.update(dt:1.0/60)
             let age = b.time-ship.start
             if b.fighters.filter({$0.side == 0}).allSatisfy(\.active), lastLaunch == nil { lastLaunch = age }
-            if age>1 && age<ship.departureAge+ship.departureDuration-0.02 {
+            if age>2.3 && age<ship.departureAge+ship.departureDuration-0.02 {
                 check(b.director.featuredCarrier === ship && b.director.event == .carrierArrival,"Camera cut away before departure completed")
-                if let cuts { check(cuts == b.director.hardCuts,"Deployment and departure contain an extra camera cut") }
+                if let cuts { check(cuts == b.director.hardCuts,"Fighter launch and departure contain an extra camera cut") }
                 else { cuts = b.director.hardCuts }
+            }
+            if age>2.8 && age<4.2, let hero = ship.squadron.first {
+                let f = b.fighters[hero]
+                check(simd_distance(b.cameraPosition,f.position)<110,"Launching fighter is too small in the capital ship shot")
+                check(simd_dot(unit(f.position-b.cameraPosition),unit(b.cameraLook-b.cameraPosition))>0.98,"Launching fighter is outside the composition")
             }
             if ship.departing && !departed {
                 departed = true
                 check(lastLaunch != nil && age-lastLaunch!<=0.22,"Capital departure did not immediately follow the final fighter")
             }
         }
-        check(departed && b.carriers.isEmpty,"Capital deployment lifecycle failed")
+        check(departed && b.carriers.isEmpty && b.director.carrierLaunchCuts == 1,"Capital deployment shot sequence failed")
     }
-    print("PASS: Imperial carrier, Galactica and basestar launch six fighters and jump away immediately within one continuous camera shot.")
+    print("PASS: all three capital ships get a wide reveal, readable foreground fighters, and immediate departure within the same launch shot.")
 }
 
 func verifySimulation() {
+    verifyBattlefieldFraming()
     verifyShipTraffic()
     verifyWeaponsAndMotion()
     verifyContinuousDeployments()
@@ -199,7 +285,9 @@ func verifySimulation() {
             var cameraVisits = Set<Int>()
             var maxLasers = 0, maxSparks = 0, maxEffects = 0, maxBlasts = 0
             var smallestShipClearance: Float = 999, smallestCameraClearance: Float = 999
+            var activeSeconds: Float = 0
             for frame in 0..<18000 {
+                activeSeconds += Float(battle.activeCount)/30
                 battle.update(dt:1.0/30.0)
                 cameraVisits.insert(battle.cameraIndex)
                 maxLasers = max(maxLasers,battle.lasers.count)
@@ -247,6 +335,7 @@ func verifySimulation() {
             check(cameraVisits.count == 6,"Not all cameras were visited")
             check(maxLasers<250 && maxSparks<1500 && maxEffects<100 && maxBlasts<40,"Unbounded effects")
             check(battle.destroyed>5 && battle.minimumFleet<=7,"No meaningful fleet attrition")
+            check(Float(battle.shots)/max(1,activeSeconds)>0.8 && battle.weaponHits>50,"Pilots did not sustain aggressive, effective gunfire")
             check(battle.waveNumber>2 && battle.reinforcements>12,"No reinforcement waves")
             check((battle.formationArrivals == 0 || battle.director.formationCuts>0) && battle.director.carrierCuts>0,"Arrival cameras did not cover the incoming ships")
             check(battle.replacementCount>=2,"Faction elimination stopped progressing")
@@ -376,6 +465,10 @@ func renderReview(directory: URL) {
         if i>0 { battle.nextCamera(); battle.update(dt:0) }
         save("camera-\(i+1)",at:Double(battle.time))
     }
+    let distant = distantSquadrons()
+    renderer.scene = distant.scene; renderer.pointOfView = distant.camera
+    save("battlefield-distant-squadron",at:0)
+    renderer.scene = battle.scene; renderer.pointOfView = battle.camera
     // Inspect combat effects and real arrival geometry, including the separate warp streak.
     battle.cameraIndex = 2
     let victim = battle.fighters.first(where:\.active)!

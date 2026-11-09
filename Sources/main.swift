@@ -200,7 +200,10 @@ final class Fighter {
     var history: [(Float,V3)] = []
     var entrySpeed: Float { entry == .hyperspace ? 28 : 160 }
     var cruiseSpeed: Float { faction == .rebel ? 48 : (faction == .empire ? 52 : 56) }
-    let accelerationLimit: Float = 60
+    let accelerationLimit: Float = 90
+    let turnRate: Float = 2.0
+    var targetReviewAt: Float = 0
+    var burstShotsLeft = 0
     let pair: Int
     let trailing: Bool
     var position = V3.zero
@@ -245,6 +248,7 @@ final class Fighter {
         arrival = 0; hitPoints = 6; collisionCooldown = 25
         motionInitialized = false; velocity = .zero; navigationUp = V3(0,1,0); bank = 0
         history.removeAll(keepingCapacity:true); breakUntil = -1
+        targetReviewAt = 0; burstShotsLeft = 0
     }
     func cacheMuzzles() {
         muzzles.removeAll(keepingCapacity:true)
@@ -392,6 +396,8 @@ final class Dogfight {
     var physicsSteps = 0
     var planetPosition = V3.zero
     var planetRadius: Float = 440
+    var planet: ProceduralPlanet?
+    var planetSunDirection = V3(0,0,1)
     var cameraAge: Float = 0
     var cameraIndex = 0
     var automatic = true
@@ -402,6 +408,7 @@ final class Dogfight {
     var cameraChanged: (() -> Void)?
     var destroyed = 0
     var shots = 0
+    var weaponHits = 0
     let cameraNames = ["ON THEIR SIX", "ASTEROID RUN", "THE BATTLEFIELD", "WINGMAN", "INTERCEPT VECTOR", "IN THE CROSSFIRE"]
     let cameraDetails = ["PURSUIT / ENGAGEMENT TRACKING", "LOW CAMERA / FLIGHT CORRIDOR", "WIDE ESTABLISHING SHOT", "LATERAL DOLLY / SQUADRON TRACKING", "FORWARD FLYBY / APPROACH CAMERA", "TWO-SHIP ENGAGEMENT CAMERA"]
     let projectileMaterials = Dictionary(uniqueKeysWithValues:Faction.allCases.map{($0,$0.shotMaterial())})
@@ -441,6 +448,7 @@ final class Dogfight {
         let sun = SCNNode(); sun.light = SCNLight(); sun.light!.type = .directional
         sun.light!.color = color(1,0.79,0.59); sun.light!.intensity = 1650
         sun.eulerAngles = SCNVector3(-0.6,-0.7,0.1)
+        planetSunDirection = unit(sun.simdOrientation.act(V3(0,0,1)))
         scene.rootNode.addChildNode(sun)
         let fill = SCNNode(); fill.light = SCNLight(); fill.light!.type = .directional
         fill.light!.color = color(0.3,0.6,1); fill.light!.intensity = 850
@@ -549,19 +557,15 @@ final class Dogfight {
         }
     }
     func makePlanet() {
-        let g = SCNSphere(radius:CGFloat(rng.range(300,480))); g.segmentCount = 72
-        let tint = rng.range(0.5,1)
-        let m = material(color(CGFloat(0.055*tint),CGFloat(0.13*tint),CGFloat(0.19*tint)), metal:0.15)
-        m.roughness.contents = 0.9
-        let a = rng.range(0,tau)
-        let n = node(g,m,V3(sin(a)*2400,rng.range(100,650),cos(a)*2400))
-        planetPosition = n.simdPosition; planetRadius = Float(g.radius)
-        scene.rootNode.addChildNode(n)
-        let atmosphere = SCNSphere(radius:g.radius*1.023); atmosphere.segmentCount = 72
-        let am = SCNMaterial(); am.diffuse.contents = color(0.08,0.35,0.5,0.06)
-        am.emission.contents = color(0.04,0.15,0.22,0.05)
-        am.transparency = 0.12; am.isDoubleSided = false; am.writesToDepthBuffer = false
-        n.addChildNode(node(atmosphere,am))
+        planetRadius = rng.range(300,480)
+        _ = rng.range(0.5,1) // Keep the existing arena random stream stable.
+        let variation = rng.range(-1.1,1.1)
+        let a = atan2(-planetSunDirection.x,-planetSunDirection.z)+variation
+        planetPosition = V3(sin(a)*2400,rng.range(100,650),cos(a)*2400)
+        let world = ProceduralPlanet(seed:seed,radius:planetRadius,sun:planetSunDirection)
+        world.node.simdPosition = planetPosition
+        scene.rootNode.addChildNode(world.node); planet = world
+        world.update(time:0)
     }
 
     func orbitPath(_ f: Fighter, _ t: Float) -> V3 {
@@ -633,12 +637,16 @@ final class Dogfight {
         for i in fighters.indices {
             let f = fighters[i]
             guard dt>0, f.cooldown<=0, f.active, f.spin == nil, time>=f.entryTime+f.formationHold else { continue }
-            if let target = chooseTarget(for:f), fire(from:i,to:target) { f.cooldown = rng.range(0.2,0.55) }
-            else { f.cooldown = 0.06 }
+            if let target = chooseTarget(for:f), fire(from:i,to:target) {
+                if f.burstShotsLeft == 0 { f.burstShotsLeft = 4 }
+                else { f.burstShotsLeft -= 1 }
+                f.cooldown = f.burstShotsLeft>0 ? 0.11 : rng.range(0.24,0.45)
+            } else { f.burstShotsLeft = 0; f.cooldown = 0.04 }
         }
         updateLasers(dt); updateSparks(dt); updateEffects(dt)
         updateReinforcements(dt); updateCarrier(); updateCamera(dt); updateBlasts(dt)
         for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
+        planet?.update(time:time)
     }
     func destroy(_ fighter: Fighter) {
         guard fighter.active else { return }
@@ -676,9 +684,9 @@ final class Dogfight {
                 let inverse = ship.node.simdWorldTransform.inverse
                 let local = (inverse*SIMD4<Float>(p.x,p.y,p.z,1)).xyz
                 let bounds = ship.cameraBounds
-                let normalized = local/bounds
+                let normalized = (local-ship.cameraCenter)/bounds
                 if simd_length_squared(normalized)<1 {
-                    let safe = unit(normalized)*bounds
+                    let safe = unit(normalized)*bounds+ship.cameraCenter
                     p = (ship.node.simdWorldTransform*SIMD4<Float>(safe.x,safe.y,safe.z,1)).xyz
                 }
             }
@@ -1108,6 +1116,10 @@ func requestedSeed() -> UInt64 {
 
 if CommandLine.arguments.contains("--verify-simulation") {
     verifySimulation()
+} else if CommandLine.arguments.contains("--combat-benchmark") {
+    combatBenchmark()
+} else if let index = CommandLine.arguments.firstIndex(of:"--render-planet-review"), index+1<CommandLine.arguments.count {
+    renderPlanetReview(directory:URL(fileURLWithPath:CommandLine.arguments[index+1]))
 } else if let index = CommandLine.arguments.firstIndex(of:"--render-review"), index+1<CommandLine.arguments.count {
     renderReview(directory:URL(fileURLWithPath:CommandLine.arguments[index+1]))
 } else {

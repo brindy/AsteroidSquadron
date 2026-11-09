@@ -21,10 +21,14 @@ final class CinematicDirector {
     var heading = V3(0,0,-1)
     var side: Float = 1
     var flybyAnchor = V3.zero
+    var overviewSubject: Int?
+    var overviewDirection = V3.zero
     var shake: Float = 0
     var rng: Random
     var formationCuts = 0
     var carrierCuts = 0
+    var carrierLaunchCuts = 0
+    var carrierLaunchShot = false
     var dangerCuts = 0
     var normalCuts = 0
     var hardCuts = 0
@@ -40,6 +44,7 @@ final class CinematicDirector {
         switch newEvent {
         case .formation: caption = "SQUADRON INBOUND"; detail = "X-WING FORMATION / HYPERSPACE INSERTION"; formationCuts += 1
         case .carrierArrival:
+            carrierLaunchShot = false
             caption = featuredCarrier?.faction.carrierName ?? "CAPITAL SHIP INBOUND"
             detail = featuredCarrier?.faction.usesBlinkFTL == true ? "FTL BLINK / SQUADRON DEPLOYMENT" : "HYPERSPACE ARRIVAL / HANGAR DEPLOYMENT"
             carrierCuts += 1
@@ -78,6 +83,8 @@ final class CinematicDirector {
         prepareShot(in:b); b.cameraChanged?()
     }
     func prepareShot(in b: Dogfight) {
+        overviewSubject = nil
+        overviewDirection = .zero
         shotLength = b.cameraIndex == 4 ? 4.8 : (b.cameraIndex == 2 ? 5.5 : rng.range(6.5,9.5))
         if let f = b.cameraSubject() {
             heading = f.forward
@@ -85,6 +92,56 @@ final class CinematicDirector {
             flybyAnchor = f.position+f.velocity*1.4+right*side*22+V3(0,7,0)
         }
         velocity = .zero; lookVelocity = .zero; normalCuts += 1
+    }
+    func battlefieldFrame(in b: Dogfight) -> (position: V3, look: V3, fov: Float) {
+        let live = b.fighters.indices.filter { b.fighters[$0].active }
+        guard !live.isEmpty else {
+            return (b.arenaRotation.act(V3(250,160,250)),.zero,49)
+        }
+        if overviewSubject == nil || !b.fighters[overviewSubject!].active {
+            let old = overviewSubject
+            // Prefer a busy engagement. Widely separated inbound squadrons are
+            // separate subjects, rather than endpoints of a mostly empty panorama.
+            overviewSubject = live.max { a,c in
+                func score(_ index: Int) -> Float {
+                    let f = b.fighters[index]
+                    return live.reduce(Float(0)) { total,j in
+                        let other = b.fighters[j], distance = simd_distance(f.position,other.position)
+                        let weight = max(0,1-distance/220)
+                        return total+weight*(f.side == other.side ? 1 : 3)
+                    }
+                }
+                return score(a)<score(c)
+            }
+            overviewDirection = .zero
+            if old != nil { b.cut = true }
+        }
+        let anchor = b.fighters[overviewSubject!]
+        let group = live.map { b.fighters[$0] }.filter { simd_distance($0.position,anchor.position)<150 }
+        let center = group.reduce(V3.zero) { $0+$1.position }/Float(group.count)
+        let radius = group.map { simd_distance($0.position,center)+$0.faction.collisionRadius }.max() ?? 20
+        let fov: Float = 49
+        let distance = max(85,radius/sin(fov*Float.pi/360)*1.12)
+        if simd_length_squared(overviewDirection)<0.1 {
+            var best = -Float.infinity
+            // Establish from an open side of the asteroid cluster so the hulls
+            // are readable instead of hidden behind a foreground boulder.
+            for step in 0..<8 {
+                let a = b.time*0.026+Float(step)*tau/8
+                let direction = unit(b.arenaRotation.act(V3(sin(a)*0.8,0.65,cos(a)*0.8)))
+                let point = center+direction*distance
+                let visible = group.reduce(Float(0)) { total,f in
+                    let blocked = b.rocks.contains { sphereImpact(from:point,to:f.position,center:$0.position,radius:$0.radius) != nil }
+                    return total+(blocked ? 0 : (f.side == anchor.side ? 1 : 2))
+                }
+                if visible>best { best = visible; overviewDirection = direction }
+            }
+        }
+        var outward = overviewDirection
+        if b.carriers.contains(where:{ !$0.node.isHidden && simd_distance($0.origin,center)<$0.worldRadius+400 }) {
+            outward = unit(anchor.forward+V3(0,0.55,0))
+        }
+        return (center+outward*distance,center,fov)
     }
     func damp(_ value: inout V3, velocity: inout V3, target: V3, frequency: Float, dt: Float) {
         let offset = value-target, e = exp(-frequency*dt)
@@ -116,11 +173,23 @@ final class CinematicDirector {
             let anchor = ship.station(age)
             let framing = ship.framingScale
             if event == .carrierArrival {
-                let linear = min(1,max(0,(age-ship.arrivalDuration)/3))
-                let dolly = linear*linear*(3-2*linear)
-                let low: Float = ship.faction == .colonial ? 25 : -38
-                desired = anchor+(right*(220-dolly*30)+up*(85+dolly*(low-85))+ship.forward*(180-dolly*25))*framing
-                look = anchor+(ship.forward*(dolly*(ship.faction == .colonial ? 55 : 22))-up*(dolly*7))*ship.scale; fov = 50
+                if age>=2.15 && !carrierLaunchShot {
+                    // One motivated cut establishes fighter scale after the wide arrival.
+                    // Keep this foreground fighter / background capital composition through departure.
+                    carrierLaunchShot = true; carrierLaunchCuts += 1; b.cut = true
+                }
+                if carrierLaunchShot, let index = ship.squadron.first {
+                    let hero = b.fighters[index]
+                    let subject = hero.active ? hero.position : hero.entryPosition
+                    let shipUp = ship.node.simdOrientation.act(up)
+                    let lead = hero.active ? hero.velocity*(2/7) : .zero
+                    desired = subject+lead+ship.forward*58-right*38-shipUp*18
+                    look = subject+shipUp*2; fov = 52
+                } else {
+                    let reveal = min(1,max(0,age-ship.arrivalDuration))
+                    desired = anchor+(right*(220-reveal*12)+up*85+ship.forward*180)*framing
+                    look = anchor; fov = 50
+                }
                 if age>ship.departureAge+ship.departureDuration { endEvent(in:b,follow:ship.squadron.first); update(0,in:b); return }
             } else {
                 desired = anchor+(right*310+up*100+ship.forward*220)*framing
@@ -162,13 +231,8 @@ final class CinematicDirector {
                 look = f.spin == nil ? mix(f.position+f.velocity*0.5,action,0.25) : f.position
                 fov = 56
             case 2:
-                let a = b.time*0.026
-                desired = b.arenaRotation.act(V3(sin(a)*310,125,cos(a)*310))
-                let live = b.fighters.filter(\.active)
-                look = live.isEmpty ? .zero : live.reduce(V3.zero) { $0+$1.position } / Float(live.count)
-                // Returning ships may still be far away; keep establishing shots in the arena.
-                if simd_length(look)>230 { look = unit(look)*100 }
-                fov = 49
+                let overview = battlefieldFrame(in:b)
+                desired = overview.position; look = overview.look; fov = overview.fov
             case 3:
                 let sweep = sin(min(1,b.cameraAge/shotLength) * Float.pi)*8
                 desired = f.position+right*(27+sweep)-heading*10+up*7
@@ -191,7 +255,10 @@ final class CinematicDirector {
             b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
         } else {
             damp(&b.cameraPosition,velocity:&velocity,target:desired,frequency:7,dt:dt)
-            damp(&b.cameraLook,velocity:&lookVelocity,target:look,frequency:9,dt:dt)
+            if event == .carrierArrival && carrierLaunchShot {
+                // Keep the small foreground subject centered while the dolly catches up.
+                b.cameraLook = look; lookVelocity = .zero
+            } else { damp(&b.cameraLook,velocity:&lookVelocity,target:look,frequency:9,dt:dt) }
         }
         b.cameraPosition = b.clearCamera(b.cameraPosition)
         let jitter = V3(sin(b.time*71),cos(b.time*59),sin(b.time*53))*shake*0.14

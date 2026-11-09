@@ -38,10 +38,20 @@ extension Dogfight {
         f.applyFlightPose()
     }
     func chooseTarget(for f: Fighter) -> Int? {
-        if let i = f.attackTarget, fighters[i].active && fighters[i].side != f.side { return i }
+        let current = f.attackTarget.flatMap { fighters[$0].active && fighters[$0].side != f.side ? $0 : nil }
+        if let current, time<f.targetReviewAt || f.burstShotsLeft>0 { return current }
         let choices = fighters.indices.filter { fighters[$0].active && fighters[$0].side != f.side }
-        let target = choices.min { simd_distance_squared(fighters[$0].position,f.position)<simd_distance_squared(fighters[$1].position,f.position) }
+        func score(_ index: Int) -> Float {
+            let enemy = fighters[index]
+            let lead = interceptPoint(from:f.position,velocity:f.velocity,target:enemy.position,targetVelocity:enemy.velocity,speed:f.faction.projectileSpeed)
+            let alignment = simd_dot(unit(lead-f.position),f.forward)
+            let distance = simd_distance(f.position,enemy.position)
+            let tail = max(0,-simd_dot(unit(f.position-enemy.position),enemy.forward))
+            return (alignment+1)*1.2+1.5/(1+distance/200)+tail*0.6+(index == current ? 0.4 : 0)
+        }
+        let target = choices.max { score($0)<score($1) }
         f.attackTarget = target
+        f.targetReviewAt = time+0.85
         return target
     }
     func updateFlight(_ f: Fighter, dt: Float, positions: [V3], velocities: [V3], active: [Bool]) {
@@ -86,7 +96,7 @@ extension Dogfight {
         }
         let traffic = shipAvoidance(f,positions:positions,velocities:velocities,active:active,speed:&speed)
         desired = unit(desired+avoidance+traffic)
-        let limitedDirection = turnToward(f.forward,desired,radians:1.7*dt)
+        let limitedDirection = turnToward(f.forward,desired,radians:f.turnRate*dt)
         let acceleration = bounded((limitedDirection*speed-f.velocity)/dt,length:f.accelerationLimit)
         f.velocity += acceleration*dt
         f.forward = unit(f.velocity)

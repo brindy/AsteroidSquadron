@@ -48,7 +48,8 @@ extension Dogfight {
         let aligned = barrels.contains { muzzle in
             let matrix = muzzle.simdWorldTransform, origin = matrix.columns.3.xyz, forward = unit(-matrix.columns.2.xyz)
             let lead = interceptPoint(from:origin,velocity:f.velocity,target:target.position,targetVelocity:target.velocity,speed:f.faction.projectileSpeed)
-            return simd_dot(unit(lead-origin),forward)>0.998 && simd_distance(origin,lead)<650
+            let cone: Float = f.burstShotsLeft>0 ? 0.9848 : 0.9945 // 10° continuing / 6° opening burst.
+            return simd_dot(unit(lead-origin),forward)>cone && simd_distance(origin,lead)<700
         }
         guard aligned else { return false }
         let generations = fighters.map(\.generation)
@@ -88,6 +89,7 @@ extension Dogfight {
                 let impact = mix(from,to,fraction)
                 burst(at:impact,count:4,big:false)
                 if let victim {
+                    weaponHits += 1
                     victim.hitPoints -= 1
                     if victim.hitPoints<=0 { destroy(victim) }
                 }

@@ -13,8 +13,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>dev.brindy.asteroid-squadron</string>
 <key>CFBundleExecutable</key><string>AsteroidSquadron</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>6</string>
-<key>CFBundleShortVersionString</key><string>1.5</string>
+<key>CFBundleVersion</key><string>8</string>
+<key>CFBundleShortVersionString</key><string>1.7</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
