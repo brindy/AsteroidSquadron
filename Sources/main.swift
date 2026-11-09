@@ -188,6 +188,16 @@ final class Fighter {
     var arrival: Float = 0
     var arrivalDelay: Float = 0
     var hitPoints = 6
+    enum Entry { case none, hyperspace, hangar }
+    var entry: Entry = .none
+    var entryTime: Float = -1000
+    var entryPosition = V3.zero
+    var entryForward = V3(0,0,-1)
+    var formationSlot = 0
+    var attackTarget: Int?
+    var spin: SpinOut?
+    var collisionCooldown: Float = 20
+    var formationHold: Float { entry == .hyperspace ? 2.1+Float(formationSlot)*0.13 : 0.8+Float(formationSlot)*0.08 }
     let warp = SCNNode()
     init(faction: Faction, pair: Int, trailing: Bool, cooldown: Float) {
         self.faction = faction; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
@@ -208,15 +218,18 @@ struct Laser {
     let faction: Faction
 }
 struct Spark {
+    enum Kind { case debris, ember, impact }
     let node: SCNNode
     var position: V3
     let velocity: V3
     var life: Float
     let duration: Float
     let scale: Float
+    let spin: V3
+    let kind: Kind
 }
 struct Transient {
-    enum Kind { case fireball, ring, light, arrival }
+    enum Kind { case flash, light, arrival }
     let node: SCNNode
     let kind: Kind
     var life: Float
@@ -286,6 +299,15 @@ final class Dogfight {
     var sparks: [Spark] = []
     var effects: [Transient] = []
     var clouds: [GasCloud] = []
+    var blasts: [ExplosionVolume] = []
+    var carrier: Carrier?
+    let director: CinematicDirector
+    var carrierVisits = 0
+    var carrierDepartures = 0
+    var formationArrivals = 0
+    var spinOuts = 0
+    var recoveries = 0
+    var asteroidLosses = 0
     let seed: UInt64
     var rng: Random
     var arenaRotation = simd_quatf(angle:0,axis:V3(0,1,0))
@@ -309,8 +331,8 @@ final class Dogfight {
     var cameraChanged: (() -> Void)?
     var destroyed = 0
     var shots = 0
-    let cameraNames = ["RED LEADER", "IMPERIAL PURSUIT", "THE ASTEROID BELT", "WINGMAN", "INTERCEPT VECTOR", "IN THE CROSSFIRE"]
-    let cameraDetails = ["X-WING CHASE CAM", "TIE FIGHTER CHASE CAM", "WIDE ORBITAL CAMERA", "SQUADRON TRACKING CAM", "FORWARD PURSUIT CAM", "BATTLEFIELD TRACKING CAM"]
+    let cameraNames = ["ON THEIR SIX", "ASTEROID RUN", "THE BATTLEFIELD", "WINGMAN", "INTERCEPT VECTOR", "IN THE CROSSFIRE"]
+    let cameraDetails = ["PURSUIT / ENGAGEMENT TRACKING", "LOW CAMERA / FLIGHT CORRIDOR", "WIDE ESTABLISHING SHOT", "LATERAL DOLLY / SQUADRON TRACKING", "FORWARD FLYBY / APPROACH CAMERA", "TWO-SHIP ENGAGEMENT CAMERA"]
     let shotMaterialRed = material(color(1,0.13,0.045), emission: color(3,0.12,0.025))
     let shotMaterialGreen = material(color(0.2,1,0.2), emission: color(0.15,3,0.15))
     let sparkMaterials = [material(color(1,0.7,0.2), emission: color(3,1.3,0.2)), material(color(1,0.25,0.06), emission: color(2,0.3,0.03)), material(color(0.6,0.6,0.6), metal: 0.8)]
@@ -323,6 +345,7 @@ final class Dogfight {
     init(seed: UInt64 = UInt64.random(in:1...UInt64.max)) {
         self.seed = seed
         rng = Random(state:seed)
+        director = CinematicDirector(seed:seed)
         arenaRotation = simd_quatf(angle:rng.range(0,tau),axis:V3(0,1,0)) * simd_quatf(angle:rng.range(-0.35,0.35),axis:V3(0,0,1))
         orbitPhase = rng.range(0,tau)
         orbitRadius = rng.range(100,130)
@@ -367,8 +390,10 @@ final class Dogfight {
                 scene.rootNode.addChildNode(f.node)
                 scene.rootNode.addChildNode(f.warp)
                 fighters.append(f)
+                f.collisionCooldown = rng.range(15,45)
             }
         }
+        selectCameraSubject(); director.prepareShot(in:self)
         update(dt: 0)
     }
 
@@ -454,7 +479,7 @@ final class Dogfight {
         n.addChildNode(node(atmosphere,am))
     }
 
-    func path(_ f: Fighter, _ t: Float) -> V3 {
+    func orbitPath(_ f: Fighter, _ t: Float) -> V3 {
         let phase = Float(f.pair) * tau / 6 + orbitPhase
         let a = t * 0.185 + phase - (f.trailing ? 0.14 : 0)
         let radius = orbitRadius + Float(f.pair % 3) * 22
@@ -462,11 +487,13 @@ final class Dogfight {
                    sin(a*2.0+phase)*30 + cos(a*3.0)*13,
                    cos(a)*radius*0.8 + sin(a*3.0+phase)*17)
         p = arenaRotation.act(p)
-        // Project the entire fighter hull outside conservative asteroid bounds.
-        // Repeat for neighboring rocks; the old soft nudge allowed actual overlap.
+        return clearFlight(p)
+    }
+    func clearFlight(_ point: V3) -> V3 {
+        var p = point
         for _ in 0..<8 {
             var moved = false
-            for rock in rocks.prefix(75) {
+            for rock in rocks {
                 let delta = p-rock.position
                 let clearance = rock.radius + 9
                 if simd_length_squared(delta) < clearance*clearance {
@@ -482,46 +509,29 @@ final class Dogfight {
     func update(dt: Float) {
         guard !paused else { return }
         time += dt; cameraAge += dt
-        if automatic && cameraAge > 14 { nextCamera() }
         for rock in rocks { rock.node.simdEulerAngles += rock.spin * dt }
         for f in fighters {
             guard f.state != .destroyed else { continue }
+            f.collisionCooldown = max(0,f.collisionCooldown-dt)
+            if f.spin != nil { updateSpinOut(f,dt:dt); continue }
             let destination = path(f,time)
             f.forward = unit(path(f,time+0.07)-destination)
             f.position = destination
             if f.state == .arriving {
-                f.arrivalDelay -= dt
-                if f.arrivalDelay > 0 { continue }
-                f.warp.isHidden = false
-                f.arrival = min(1,f.arrival+dt/1.25)
-                let remaining = 1-f.arrival
-                f.position -= f.forward*1400*pow(remaining,4)
-                // The hyperspace streak arrives first; reveal the solid hull only in its
-                // cleared landing corridor, so it cannot slice through rocks en route.
-                f.node.isHidden = f.arrival<0.82
-                f.node.opacity = CGFloat(max(0,min(1,(f.arrival-0.82)/0.1)))
-                let length = max(1,remaining*240)
-                f.warp.simdPosition = f.position-f.forward*length*0.5
-                f.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:f.forward)
-                f.warp.simdScale = V3(1,1,length)
-                f.warp.opacity = CGFloat(remaining)
-                if f.arrival >= 1 {
-                    f.state = .active; f.node.opacity = 1; f.warp.isHidden = true
-                    arrivalFlash(at:destination)
-                    reinforcements += 1
-                }
+                if !updateArrival(f) { continue }
             }
             f.node.simdPosition = f.position
             let up = V3(sin(time*0.8+Float(f.pair))*0.22,1,cos(time*0.7+Float(f.pair))*0.12)
             f.node.look(at:SCNVector3(f.position+f.forward*20), up:SCNVector3(up), localFront:SCNVector3(0,0,-1))
             f.cooldown -= dt
+            if f.active { tryAsteroidStrike(f,dt:dt) }
         }
         for i in 0..<fighters.count {
             let f = fighters[i]
-            guard f.cooldown <= 0, f.active else { continue }
+            guard f.cooldown <= 0, f.active, f.spin == nil, time >= f.entryTime+f.formationHold else { continue }
             let enemies = fighters.indices.filter { fighters[$0].active && fighters[$0].faction != f.faction }
             let inFront = enemies.filter { simd_dot(unit(fighters[$0].position-f.position),f.forward)>0.05 }
-            let target = inFront.min { simd_distance_squared(fighters[$0].position,f.position)<simd_distance_squared(fighters[$1].position,f.position) }
+            let target = f.attackTarget.flatMap { inFront.contains($0) ? $0 : nil } ?? inFront.min { simd_distance_squared(fighters[$0].position,f.position)<simd_distance_squared(fighters[$1].position,f.position) }
             if let target { fire(from:i,to:target) }
             f.cooldown = rng.range(0.35,0.95)
         }
@@ -529,7 +539,9 @@ final class Dogfight {
         updateSparks(dt)
         updateEffects(dt)
         updateReinforcements(dt)
+        updateCarrier()
         updateCamera(dt)
+        updateBlasts(dt)
         for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
     }
     func fire(from: Int, to: Int, aimed: Bool = true) {
@@ -578,28 +590,12 @@ final class Dogfight {
         if fighter === cameraSubject(), cameraIndex != 2 {
             wreckHold = 1.15; wreckPosition = fighter.position
         }
-        burst(at:fighter.position,count:75,big:true)
+        let velocity = fighter.spin?.velocity ?? (path(fighter,time+0.08)-path(fighter,time))/0.08
+        burst(at:fighter.position,count:42,big:true,velocity:velocity)
         fighter.state = .destroyed; fighter.node.isHidden = true; fighter.warp.isHidden = true
+        fighter.spin = nil
         destroyed += 1
         minimumFleet = min(minimumFleet,activeCount)
-    }
-
-    func updateReinforcements(_ dt: Float) {
-        // Wait for meaningful attrition, then bring back a staggered wave.
-        if waveCountdown == nil && arrivingCount == 0 && (activeCount <= 7 || rebelCount <= 2 || empireCount <= 2) {
-            waveCountdown = rng.range(3.5,5.5)
-        }
-        guard let countdown = waveCountdown else { return }
-        waveCountdown = countdown-dt
-        if countdown <= dt {
-            var index = 0
-            for f in fighters where f.state == .destroyed {
-                f.state = .arriving; f.arrival = 0; f.arrivalDelay = Float(index)*0.24
-                f.hitPoints = 6; f.cooldown = rng.range(0.4,1.2)
-                index += 1
-            }
-            waveNumber += 1; waveCountdown = nil
-        }
     }
 
     func arrivalFlash(at p: V3) {
@@ -608,118 +604,6 @@ final class Dogfight {
         let n = node(g,m,p); n.simdScale = V3(3,3,3)
         scene.rootNode.addChildNode(n)
         effects.append(Transient(node:n,kind:.arrival,life:0.45,duration:0.45))
-    }
-    func burst(at p: V3, count: Int, big: Bool) {
-        for i in 0..<count {
-            let duration = rng.range(0.3,big ? 1.8 : 0.6)
-            let scale = rng.range(0.1,big ? 1.6 : 0.5)
-            let g: SCNGeometry = i%3 == 0 ? SCNBox(width:1,height:0.5,length:1.4,chamferRadius:0) : SCNSphere(radius:0.6)
-            if let s = g as? SCNSphere { s.segmentCount = 6 }
-            let n = node(g,sparkMaterials[i%3],p)
-            n.simdScale = V3(repeating:scale)
-            n.simdEulerAngles = rng.vector(.pi)
-            scene.rootNode.addChildNode(n)
-            sparks.append(Spark(node:n,position:p,velocity:rng.vector(big ? 24 : 10),life:duration,duration:duration,scale:scale))
-        }
-        if big {
-            let fireball = node(SCNSphere(radius:1),sparkMaterials[0],p)
-            scene.rootNode.addChildNode(fireball)
-            effects.append(Transient(node:fireball,kind:.fireball,life:0.7,duration:0.7))
-            let ring = node(SCNTorus(ringRadius:1,pipeRadius:0.025),sparkMaterials[1],p)
-            ring.simdOrientation = simd_quatf(from:V3(0,1,0),to:unit(cameraPosition-p))
-            scene.rootNode.addChildNode(ring)
-            effects.append(Transient(node:ring,kind:.ring,life:1.2,duration:1.2))
-            let light = SCNNode(); light.light = SCNLight(); light.light!.type = .omni
-            light.light!.color = orange; light.light!.intensity = 2500; light.light!.attenuationEndDistance = 100
-            light.simdPosition = p; scene.rootNode.addChildNode(light)
-            effects.append(Transient(node:light,kind:.light,life:0.5,duration:0.5))
-        }
-    }
-    func updateEffects(_ dt: Float) {
-        for i in effects.indices.reversed() {
-            effects[i].life -= dt
-            let t = max(0,effects[i].life/effects[i].duration), age = 1-t
-            let n = effects[i].node
-            switch effects[i].kind {
-            case .fireball:
-                n.simdScale = V3(repeating:1+age*9); n.opacity = CGFloat(t*t)
-            case .ring:
-                n.simdScale = V3(repeating:1+age*36); n.opacity = CGFloat(t*t*0.6)
-            case .light: n.light?.intensity = CGFloat(2500*t*t)
-            case .arrival:
-                n.simdScale = V3(repeating:0.3+t*3); n.opacity = CGFloat(t)
-            }
-            if effects[i].life<=0 { n.removeFromParentNode(); effects.remove(at:i) }
-        }
-    }
-    func updateSparks(_ dt: Float) {
-        for i in sparks.indices.reversed() {
-            sparks[i].life -= dt; sparks[i].position += sparks[i].velocity*dt
-            sparks[i].node.simdPosition = sparks[i].position
-            let t = max(0,sparks[i].life/sparks[i].duration)
-            sparks[i].node.opacity = CGFloat(t)
-            sparks[i].node.simdScale = V3(repeating:sparks[i].scale*(0.4+t))
-            if sparks[i].life <= 0 { sparks[i].node.removeFromParentNode(); sparks.remove(at:i) }
-        }
-    }
-    func cameraSubject() -> Fighter? {
-        cameraIndex == 2 || !fighters[followedIndex].active ? nil : fighters[followedIndex]
-    }
-    func selectCameraSubject() {
-        let preferred = [0,1,0,4,7,8][cameraIndex]
-        let faction = fighters[preferred].faction
-        followedIndex = fighters[preferred].active ? preferred : (fighters.firstIndex { $0.active && $0.faction == faction } ?? fighters.firstIndex(where:\.active) ?? preferred)
-    }
-    func nextCamera() {
-        cameraIndex = (cameraIndex+1)%cameraNames.count
-        cameraAge = 0; cut = true
-        wreckHold = 0; selectCameraSubject()
-        cameraChanged?()
-    }
-    func updateCamera(_ dt: Float) {
-        if wreckHold > 0 {
-            wreckHold -= dt
-            camera.look(at:SCNVector3(wreckPosition))
-            if wreckHold <= 0 { selectCameraSubject(); cut = true }
-            return
-        }
-        if cameraIndex != 2 && !fighters[followedIndex].active { selectCameraSubject(); cut = true }
-        var desired: V3, look: V3
-        let f = cameraSubject() ?? fighters.first(where:\.active) ?? fighters[0]
-        let right = unit(simd_cross(f.forward,V3(0,1,0)))
-        switch cameraIndex {
-        case 0:
-            desired = f.position-f.forward*25+V3(0,9,0)+right*12
-            look = f.position+f.forward*28
-        case 1:
-            desired = f.position-f.forward*28+V3(0,6,0)-right*7
-            look = f.position+f.forward*25
-        case 2:
-            let a = time*0.035
-            desired = V3(sin(a)*310,145+sin(a*2)*35,cos(a)*310)
-            look = V3(0,-2,0)
-        case 3:
-            desired = f.position+right*23-f.forward*9+V3(0,4,0)
-            look = f.position+f.forward*18
-        case 4:
-            desired = f.position+f.forward*24+right*10+V3(0,5,0)
-            look = f.position-f.forward*25
-        default:
-            desired = f.position-f.forward*65+right*35+V3(0,30,0)
-            look = f.position+f.forward*12
-        }
-        // Keep camera bodies outside asteroid surfaces too.
-        desired = clearCamera(desired)
-        let smoothing: Float = cut ? 1 : 1-exp(-dt*4)
-        cameraPosition = mix(cameraPosition,desired,smoothing)
-        // Smoothing itself can cross a rock or another fighter, so check the actual camera too.
-        cameraPosition = clearCamera(cameraPosition)
-        cameraLook = mix(cameraLook,look,cut ? 1 : 1-exp(-dt*5))
-        camera.simdPosition = cameraPosition
-        let roll = cameraIndex == 2 ? Float(0) : sin(time*0.3)*0.045
-        camera.look(at:SCNVector3(cameraLook),up:SCNVector3(roll,1,0),localFront:SCNVector3(0,0,-1))
-        camera.camera!.fieldOfView = cameraIndex == 2 ? 65 : 58
-        cut = false
     }
     func clearCamera(_ point: V3) -> V3 {
         var p = point
@@ -732,6 +616,16 @@ final class Dogfight {
                 let delta = p-f.position
                 let clearance: Float = f === cameraSubject() ? 17 : 10
                 if simd_length_squared(delta)<clearance*clearance { p = f.position+unit(delta)*clearance }
+            }
+            if let ship = carrier, !ship.node.isHidden {
+                let inverse = ship.node.simdWorldTransform.inverse
+                let local = (inverse*SIMD4<Float>(p.x,p.y,p.z,1)).xyz
+                let bounds = V3(77,68,130)
+                let normalized = local/bounds
+                if simd_length_squared(normalized)<1 {
+                    let safe = unit(normalized)*bounds
+                    p = (ship.node.simdWorldTransform*SIMD4<Float>(safe.x,safe.y,safe.z,1)).xyz
+                }
             }
         }
         return p
@@ -754,8 +648,11 @@ final class KeepAwake {
     deinit { stop() }
 }
 
+final class HUDLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
 func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, color c: NSColor = .white, mono: Bool = false) -> NSTextField {
-    let l = NSTextField(labelWithString:text)
+    let l = HUDLabel(labelWithString:text)
     l.font = mono ? .monospacedSystemFont(ofSize:size,weight:weight) : .systemFont(ofSize:size,weight:weight)
     l.textColor = c; l.lineBreakMode = .byClipping
     return l
@@ -789,12 +686,41 @@ final class Overlay: NSView {
 final class FlightView: SCNView {
     var keyHandler: ((String)->Void)?
     var activity: (()->Void)?
+    private var dragWindowOrigin: NSPoint?
+    private var dragMouseOrigin: NSPoint?
+    var lastPointerEvent = "none"
+    var dragEventCount = 0
+    var isDraggingWindow: Bool { dragWindowOrigin != nil }
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) {
         if let key = event.charactersIgnoringModifiers?.lowercased() { keyHandler?(key); activity?() }
     }
     override func mouseMoved(with event: NSEvent) { activity?() }
-    override func mouseDown(with event: NSEvent) { activity?() }
+    override func mouseDown(with event: NSEvent) {
+        lastPointerEvent = "down / \(event.clickCount) clicks"
+        activity?()
+        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        if event.clickCount == 2 { window.performZoom(nil) }
+        else {
+            dragWindowOrigin = window.frame.origin
+            dragMouseOrigin = window.convertPoint(toScreen:event.locationInWindow)
+        }
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let window, let origin = dragWindowOrigin, let mouse = dragMouseOrigin else { return }
+        let current = window.convertPoint(toScreen:event.locationInWindow)
+        dragEventCount += 1
+        lastPointerEvent = "drag"
+        window.setFrameOrigin(NSPoint(x:origin.x+current.x-mouse.x,y:origin.y+current.y-mouse.y))
+        activity?()
+    }
+    override func mouseUp(with event: NSEvent) {
+        lastPointerEvent = "up"
+        dragWindowOrigin = nil; dragMouseOrigin = nil
+    }
+    override func smartMagnify(with event: NSEvent) {
+        if let window, !window.styleMask.contains(.fullScreen) { window.performZoom(nil) }
+    }
 }
 
 final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -823,6 +749,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var hudHidden = false
     var highQuality = false
     var activityToken: NSObjectProtocol?
+    var pointerMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -834,7 +761,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window = NSWindow(contentRect:NSRect(x:0,y:0,width:width,height:height),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         window.title = "Asteroid Squadron"
         window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
-        window.backgroundColor = .black; window.isMovableByWindowBackground = true
+        window.backgroundColor = .black; window.isMovableByWindowBackground = false
         window.minSize = NSSize(width:840,height:540)
         window.collectionBehavior = [.fullScreenPrimary]
         window.delegate = self; window.acceptsMouseMovedEvents = true
@@ -852,6 +779,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         view.activity = { [weak self] in self?.showControls() }
         window.contentView = view
         buildHUD()
+        // Intercept the scene's drag before SceneKit's gesture recognizers consume it.
+        // Keep buttons and native window chrome on their normal AppKit event paths.
+        pointerMonitor = NSEvent.addLocalMonitorForEvents(matching:[.leftMouseDown,.leftMouseDragged,.leftMouseUp]) { [weak self] event in
+            guard let self, event.window === self.window, !self.window.styleMask.contains(.fullScreen) else { return event }
+            if event.type == .leftMouseDown {
+                let point = self.view.convert(event.locationInWindow,from:nil)
+                guard self.view.bounds.contains(point), point.y<self.view.bounds.height-28 else { return event }
+                var hit = self.view.hitTest(point)
+                while let candidate = hit {
+                    if candidate is NSButton { return event }
+                    hit = candidate.superview
+                }
+                self.view.mouseDown(with:event)
+                return nil
+            }
+            if self.view.isDraggingWindow {
+                if event.type == .leftMouseDragged { self.view.mouseDragged(with:event) }
+                if event.type == .leftMouseUp { self.view.mouseUp(with:event) }
+                return nil
+            }
+            return event
+        }
         battle.cameraChanged = { [weak self] in self?.updateCameraHUD() }
         updateCameraHUD()
         _ = awake.start(); updateStatus()
@@ -884,6 +833,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pauseItem = menuView.addItem(withTitle:"Pause Flight",action:#selector(togglePause),keyEquivalent:"p")
         menuView.addItem(withTitle:"Show / Hide Overlay",action:#selector(toggleHUD),keyEquivalent:"u")
         menuView.addItem(withTitle:"Toggle Full Screen",action:#selector(fullscreen),keyEquivalent:"f")
+        menuView.addItem(withTitle:"Fill / Restore Window",action:#selector(fillWindow),keyEquivalent:"")
         menuView.addItem(withTitle:"Toggle 30 / 60 FPS",action:#selector(toggleQuality),keyEquivalent:"j")
         menuView.addItem(withTitle:"Generate New Arena",action:#selector(newArena),keyEquivalent:"r")
         viewItem.submenu = menuView
@@ -950,13 +900,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         place(cameraDetail,x:39,y:27,width:430,height:17)
         telemetry = label("",size:10,color:color(0.45,0.62,0.66),mono:true)
         place(telemetry,x:38,y:107,width:680,height:17)
-        autoButton = button("AUTO  ON",action:#selector(toggleAutomatic),tooltip:"Automatic camera changes every 14 seconds (A)")
+        autoButton = button("AUTO  ON",action:#selector(toggleAutomatic),tooltip:"Action-directed cinematic camera cuts (A)")
         place(autoButton,x:w-410,y:38,width:93,height:34,mask:[.minXMargin])
         let next = button("NEXT  →",action:#selector(nextCamera),tooltip:"Next camera (C or right arrow)")
         place(next,x:w-305,y:38,width:89,height:34,mask:[.minXMargin])
         pauseButton = button("Ⅱ",action:#selector(togglePause),tooltip:"Pause flight; keep awake stays on (Space)")
         place(pauseButton,x:w-204,y:38,width:44,height:34,mask:[.minXMargin])
-        let full = button("⛶",action:#selector(fullscreen),tooltip:"Full screen (F). Escape exits full screen.")
+        let full = button("⛶",action:#selector(fullscreen),tooltip:"Full screen (F). Double-click the scene to fill / restore the window instead.")
         place(full,x:w-148,y:38,width:44,height:34,mask:[.minXMargin])
         let help = button("?",action:#selector(showHelp),tooltip:"Controls & information (?)")
         place(help,x:w-92,y:38,width:54,height:34,mask:[.minXMargin])
@@ -983,8 +933,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if let countdown = battle.waveCountdown {
                 eventStatus.stringValue = String(format:"HYPERSPACE SIGNATURES  ·  ETA %02d SEC",max(0,Int(ceil(countdown))))
                 eventStatus.textColor = cyan
-            } else if battle.arrivingCount > 0 {
-                eventStatus.stringValue = "REINFORCEMENTS DROPPING FROM HYPERSPACE"
+            } else if battle.fighters.contains(where:{$0.state == .arriving && $0.entry == .hyperspace}) {
+                eventStatus.stringValue = "X-WING FORMATION EXITING HYPERSPACE"
+                eventStatus.textColor = cyan
+            } else if let ship = battle.carrier {
+                let age = battle.time-ship.start
+                eventStatus.stringValue = age<0 ? "IMPERIAL CARRIER APPROACHING" : (age<1.4 ? "CAPITAL SHIP EXITING HYPERSPACE" : (age<10 ? "HANGAR LAUNCH / TIE SQUADRON DEPLOYING" : "IMPERIAL CARRIER DEPARTING"))
                 eventStatus.textColor = cyan
             } else {
                 eventStatus.stringValue = String(format:"%03d LOSSES   /   %03d REINFORCEMENTS",battle.destroyed,battle.reinforcements)
@@ -994,6 +948,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let idle = now-lastActivity > 9
             if !hudHidden { overlay.alphaValue = idle ? 0.34 : 1 }
             updateStatus()
+            writeRuntimeStatus()
         }
     }
     func showControls() {
@@ -1001,8 +956,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !hudHidden { overlay.alphaValue = 1 }
     }
     func updateCameraHUD() {
-        cameraTitle.stringValue = battle.cameraNames[battle.cameraIndex]
-        cameraDetail.stringValue = String(format:"CAM %02d / 06   ·   %@",battle.cameraIndex+1,battle.cameraDetails[battle.cameraIndex])
+        cameraTitle.stringValue = battle.director.caption ?? battle.cameraNames[battle.cameraIndex]
+        cameraDetail.stringValue = battle.director.detail ?? String(format:"CAM %02d / 06   ·   %@",battle.cameraIndex+1,battle.cameraDetails[battle.cameraIndex])
         autoButton.title = battle.automatic ? "AUTO  ON" : "AUTO  OFF"
         autoItem.state = battle.automatic ? .on : .off
     }
@@ -1037,6 +992,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func toggleAwake() { if awake.enabled { awake.stop() } else { _ = awake.start() }; updateStatus(); showControls() }
     @objc func toggleHUD() { hudHidden.toggle(); overlay.isHidden = hudHidden; showControls() }
     @objc func fullscreen() { window.toggleFullScreen(nil); showControls() }
+    @objc func fillWindow() { if !window.styleMask.contains(.fullScreen) { window.performZoom(nil) }; showControls() }
     @objc func toggleQuality() {
         highQuality.toggle(); view.preferredFramesPerSecond = highQuality ? 60 : 30
         view.antialiasingMode = highQuality ? .multisampling4X : .multisampling2X
@@ -1051,26 +1007,38 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateCameraHUD(); showControls()
     }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:"1.1",.credits:NSAttributedString(string:"An endless, procedural X-wing and TIE fighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm.")])
+        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:"1.2",.credits:NSAttributedString(string:"An endless, procedural X-wing and TIE fighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm.")])
     }
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "C / →   Next camera\nA          Automatic camera cuts\nF          Toggle full screen\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\n⌘Q       Quit and release keep awake\n\nFighters are lost in combat. When either squadron is depleted, reinforcements arrive in a staggered hyperspace wave. The gas clouds are procedural 3D density volumes.\n\nKeep awake uses caffeinate -d -i, including while paused or minimized. Closing the window quits the app and releases its assertions.\n\nDefault: 30 fps. No audio, network, or downloaded assets.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm."
+        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Cinematic automatic director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\n⌘Q       Quit and release keep awake\n\nX-wings jump in as a V formation, then peel off toward separate targets. TIE fighters launch from an arriving capital ship; the carrier then jumps away. Asteroid strikes can cause a recoverable spin or a fatal loss of control. The director follows these events automatically.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate(); awake.stop()
+        if let pointerMonitor { NSEvent.removeMonitor(pointerMonitor) }
         if let token = activityToken { ProcessInfo.processInfo.endActivity(token) }
     }
     func windowDidBecomeKey(_ notification: Notification) { window.makeFirstResponder(view) }
+    func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
+        window.screen?.visibleFrame ?? newFrame
+    }
+    func windowDidResize(_ notification: Notification) { writeRuntimeStatus() }
+    func windowDidMove(_ notification: Notification) { writeRuntimeStatus() }
     func smokeTest() {
         let output = URL(fileURLWithPath:CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png")
         let image = view.snapshot()
         if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data:tiff), let png = bitmap.representation(using:.png,properties:[:]) { try? png.write(to:output) }
-        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"snapshot":output.path]
+        writeRuntimeStatus()
+    }
+    func writeRuntimeStatus() {
+        guard CommandLine.arguments.contains("--smoke-test"), let battle, let window else { return }
+        let path = CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png"
+        let output = URL(fileURLWithPath:path)
+        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"spinOuts":battle.spinOuts,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }
