@@ -41,68 +41,97 @@ extension Dogfight {
         }
     }
 
+    func requestReplacement(for side: Int) {
+        let roster = fighters.filter { $0.side == side }
+        guard !pendingSides.contains(side), roster.allSatisfy({$0.state == .destroyed}), !carriers.contains(where:{$0.side == side}) else { return }
+        let previous = sideFactions[side]
+        let options = Faction.allCases.filter { $0 != previous && $0 != sideFactions[1-side] }
+        let next = options[rng.index(options.count)]
+        sideFactions[side] = next
+        for f in roster { f.replaceFaction(next); f.orbitRate = rng.range(0.17,0.21) }
+        pendingSides.insert(side)
+        fleetRequests.append(FleetRequest(side:side,countdown:rng.range(2.5,4.5)))
+        replacementCount += 1
+        replacements.append(FleetReplacement(side:side,defeated:previous,incoming:next,time:time))
+        if replacements.count>64 { replacements.removeFirst(replacements.count-64) }
+        encounteredFactions.insert(next)
+    }
+
     func updateReinforcements(_ dt: Float) {
-        if waveCountdown == nil && arrivingCount == 0 && carrier == nil && (activeCount<=7 || rebelCount<=2 || empireCount<=2) {
-            waveCountdown = rng.range(3.5,5.5)
+        // Partial squadrons stay depleted. A new faction is chosen only after total defeat.
+        for side in 0..<2 { requestReplacement(for:side) }
+        for i in fleetRequests.indices.reversed() {
+            fleetRequests[i].countdown -= dt
+            if fleetRequests[i].countdown<=0 {
+                let side = fleetRequests[i].side
+                fleetRequests.remove(at:i); pendingSides.remove(side)
+                deployReinforcements(side:side)
+            }
         }
-        guard let countdown = waveCountdown else { return }
-        waveCountdown = countdown-dt
-        guard countdown<=dt else { return }
-        waveNumber += 1; waveCountdown = nil
-        deployReinforcements()
     }
 
     func deployReinforcements() {
-        let rebels = fighters.indices.filter { fighters[$0].state == .destroyed && fighters[$0].faction == .rebel }
-        let empire = fighters.indices.filter { fighters[$0].state == .destroyed && fighters[$0].faction == .empire }
-        // Find a clear entry corridor for the complete V formation, not separate random landings.
-        let slots: [V3] = [V3(0,0,0),V3(-14,-1,-13),V3(14,-1,-13),V3(-28,-2,-26),V3(28,-2,-26),V3(0,8,-32)]
-        var origin = V3.zero, heading = V3(0,0,-1), right = V3(1,0,0)
-        for attempt in 0..<80 {
-            let a = rng.range(0,tau)
-            origin = V3(sin(a)*210,245+Float(attempt)*2,cos(a)*210)
-            heading = unit(V3(-origin.x,-65,-origin.z)); right = unit(simd_cross(heading,V3(0,1,0)))
-            let blocked = slots.contains { slot in
-                let point = origin+right*slot.x+V3(0,slot.y,0)+heading*slot.z
-                let segment = heading*95
-                return rocks.contains { rock in
-                    let u = max(0,min(1,simd_dot(rock.position-point,segment)/simd_length_squared(segment)))
-                    return simd_distance(point+segment*u,rock.position)<rock.radius+17
+        for side in 0..<2 where fighters.filter({$0.side == side}).allSatisfy({$0.state == .destroyed}) {
+            deployReinforcements(side:side)
+        }
+    }
+
+    func deployReinforcements(side: Int) {
+        let squadron = fighters.indices.filter { fighters[$0].side == side }
+        guard squadron.allSatisfy({fighters[$0].state == .destroyed}) else { return }
+        let faction = sideFactions[side]
+        let start = max(time,nextArrivalTime)
+        nextArrivalTime = start+7.2
+        waveNumber += 1
+        if faction == .rebel {
+            // The complete V formation gets one collision-free entry corridor.
+            let slots: [V3] = [V3(0,0,0),V3(-14,-1,-13),V3(14,-1,-13),V3(-28,-2,-26),V3(28,-2,-26),V3(0,8,-32)]
+            var origin = V3.zero, heading = V3(0,0,-1), right = V3(1,0,0)
+            for attempt in 0..<80 {
+                let a = rng.range(0,tau)
+                origin = V3(sin(a)*210,245+Float(attempt)*2,cos(a)*210)
+                heading = unit(V3(-origin.x,-65,-origin.z)); right = unit(simd_cross(heading,V3(0,1,0)))
+                let blocked = slots.contains { slot in
+                    let point = origin+right*slot.x+V3(0,slot.y,0)+heading*slot.z
+                    let segment = heading*95
+                    return rocks.contains { rock in
+                        let u = max(0,min(1,simd_dot(rock.position-point,segment)/simd_length_squared(segment)))
+                        return simd_distance(point+segment*u,rock.position)<rock.radius+17
+                    }
                 }
+                if !blocked { break }
             }
-            if !blocked { break }
-        }
-        for (slot,index) in rebels.enumerated() {
-            let f = fighters[index], offset = slots[slot]
-            f.state = .arriving; f.entry = .hyperspace; f.entryTime = time+1.25
-            f.entryPosition = origin+right*offset.x+V3(0,offset.y,0)+heading*offset.z
-            f.entryForward = heading; f.formationSlot = slot; f.arrival = 0
-            f.hitPoints = 6; f.cooldown = 1
-        }
-        if !rebels.isEmpty {
+            for (slot,index) in squadron.enumerated() {
+                let f = fighters[index], offset = slots[slot]
+                f.state = .arriving; f.entry = .hyperspace; f.entryTime = start+1.25
+                f.entryPosition = origin+right*offset.x+V3(0,offset.y,0)+heading*offset.z
+                f.entryForward = heading; f.formationSlot = slot; f.arrival = 0
+                f.hitPoints = 6; f.cooldown = 1; f.collisionCooldown = 25
+            }
             formationArrivals += 1
-            director.arrivalFlight = ArrivalFlight(indices:rebels,origin:origin,forward:heading,start:time)
-        }
-        if !empire.isEmpty {
-            let a = rng.range(0,tau)
-            let position = V3(sin(a)*1320,460,cos(a)*1320)
+            director.arrivalFlight = ArrivalFlight(indices:squadron,origin:origin,forward:heading,start:start)
+        } else {
+            var position = V3.zero
+            for _ in 0..<80 {
+                let a = rng.range(0,tau)
+                position = V3(sin(a)*1320,460,cos(a)*1320)
+                if carriers.allSatisfy({simd_distance($0.origin,position)>650}) { break }
+            }
             let direction = unit(-position)
-            let start = time+(rebels.isEmpty ? 0 : 6.5)
-            let ship = Carrier(origin:position,forward:direction,start:start,squadron:empire)
-            carrier = ship
+            let ship = Carrier(faction:faction,side:side,origin:position,forward:direction,start:start,squadron:squadron)
+            carriers.append(ship)
             scene.rootNode.addChildNode(ship.node); scene.rootNode.addChildNode(ship.warp)
-            let side = unit(simd_cross(direction,V3(0,1,0)))
-            for (slot,index) in empire.enumerated() {
+            for (slot,index) in squadron.enumerated() {
                 let f = fighters[index]
                 f.state = .arriving; f.entry = .hangar; f.entryTime = start+2.5+Float(slot)*0.35
-                let age = f.entryTime-start
-                f.entryPosition = ship.station(age)+side*(slot%2 == 0 ? -11 : 11)+V3(0,-16,0)-direction*15
+                f.entryPosition = ship.launchPosition(slot:slot,at:f.entryTime-start)
                 f.entryForward = direction; f.formationSlot = slot; f.arrival = 0
-                f.hitPoints = 6; f.cooldown = 1.2; f.warp.isHidden = true
+                f.hitPoints = 6; f.cooldown = 1.2; f.warp.isHidden = true; f.collisionCooldown = 25
             }
         }
-        // Assign after both rosters are marked arriving, so each fighter gets its own opponent.
-        assignTargets(rebels); assignTargets(empire)
+        for side in 0..<2 {
+            assignTargets(fighters.indices.filter{fighters[$0].side == side && fighters[$0].state != .destroyed})
+        }
     }
 
     func updateArrival(_ f: Fighter) -> Bool {
@@ -131,35 +160,62 @@ extension Dogfight {
     }
 
     func updateCarrier() {
-        guard let ship = carrier else { return }
-        let age = time-ship.start
-        guard age>=0 else { return }
-        if !ship.announced {
-            ship.announced = true; carrierVisits += 1
-            director.requestCarrierArrival(in:self)
-        }
-        var position = ship.station(age)
-        var beam: Float = 0
-        if age<1.4 {
-            let t = age/1.4
-            position = ship.origin-ship.forward*2800*pow(1-t,4)
-            ship.node.isHidden = t<0.68; beam = (1-t)*1000
-        } else if age>10 {
-            if !ship.departing {
-                ship.departing = true; carrierDepartures += 1
-                director.requestCarrierDeparture(in:self)
+        for i in carriers.indices.reversed() {
+            let ship = carriers[i], age = time-ship.start
+            guard age>=0 else { continue }
+            if !ship.announced {
+                ship.announced = true; carrierVisits += 1
+                director.requestCarrierArrival(ship,in:self)
             }
-            let t = min(1,(age-10)/1.4)
-            position += ship.forward*3000*pow(t,3)
-            ship.node.isHidden = t>0.7; beam = t*1500
-        } else { ship.node.isHidden = false }
-        ship.node.simdPosition = position
-        ship.warp.isHidden = beam<1
-        ship.warp.simdPosition = position-ship.forward*beam*0.5
-        ship.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:ship.forward)
-        ship.warp.simdScale = V3(1,1,max(1,beam))
-        if age>11.8 {
-            ship.node.removeFromParentNode(); ship.warp.removeFromParentNode(); carrier = nil
+            // Finish the other capital ship's launch shot before cutting to this departure.
+            if age>=ship.departureAge && !ship.departing && director.event == .carrierArrival && director.featuredCarrier !== ship {
+                ship.departureAge = age+0.2
+            }
+            var position = ship.station(age)
+            var beam: Float = 0
+            if ship.faction.usesBlinkFTL {
+                ship.warp.isHidden = true
+                if age<ship.arrivalDuration {
+                    ship.node.isHidden = true
+                } else if age<ship.departureAge {
+                    if !ship.blinkEntered {
+                        ship.blinkEntered = true; blinkArrivals += 1
+                        jumpPulse(at:ship.origin,radius:ship.cameraBounds.z*1.25)
+                    }
+                    ship.node.isHidden = false
+                } else {
+                    if !ship.blinkExited {
+                        ship.blinkExited = true; ship.departing = true
+                        blinkDepartures += 1; carrierDepartures += 1
+                        jumpPulse(at:ship.origin,radius:ship.cameraBounds.z*1.25)
+                        director.requestCarrierDeparture(ship,in:self)
+                    }
+                    ship.node.isHidden = true
+                }
+            } else {
+                if age<1.4 {
+                    let t = age/1.4
+                    position = ship.origin-ship.forward*2800*pow(1-t,4)
+                    ship.node.isHidden = t<0.68; beam = (1-t)*1000
+                } else if age>ship.departureAge {
+                    if !ship.departing {
+                        ship.departing = true; carrierDepartures += 1
+                        director.requestCarrierDeparture(ship,in:self)
+                    }
+                    let t = min(1,(age-ship.departureAge)/1.4)
+                    position += ship.forward*3000*pow(t,3)
+                    ship.node.isHidden = t>0.7; beam = t*1500
+                } else { ship.node.isHidden = false }
+                ship.warp.isHidden = beam<1
+                ship.warp.simdPosition = position-ship.forward*beam*0.5
+                ship.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:ship.forward)
+                ship.warp.simdScale = V3(1,1,max(1,beam))
+            }
+            ship.node.simdPosition = position
+            let linger: Float = ship.faction.usesBlinkFTL ? 0.65 : 1.8
+            if age>ship.departureAge+linger {
+                ship.node.removeFromParentNode(); ship.warp.removeFromParentNode(); carriers.remove(at:i)
+            }
         }
     }
 }

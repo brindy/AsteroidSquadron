@@ -23,6 +23,7 @@ struct Random {
     mutating func vector(_ radius: Float) -> V3 {
         V3(range(-radius, radius), range(-radius, radius), range(-radius, radius))
     }
+    mutating func index(_ count: Int) -> Int { min(count-1,Int(next()*Float(count))) }
 }
 
 func material(_ base: NSColor, emission: NSColor? = nil, metal: CGFloat = 0) -> SCNMaterial {
@@ -57,8 +58,6 @@ func segment(_ from: V3, _ to: V3, radius: CGFloat, mat: SCNMaterial) -> SCNNode
     n.simdPosition = (from + to) / 2
     return n
 }
-
-enum Faction { case rebel, empire }
 
 // Closed, flat-shaded convex hull; every face has an explicit outward normal.
 func hullMesh(_ vertices: [V3], faces: [[Int]], mat: SCNMaterial) -> SCNNode {
@@ -175,8 +174,12 @@ struct Rock {
     let spin: V3
 }
 final class Fighter {
-    let node: SCNNode
-    let faction: Faction
+    let node = SCNNode()
+    var faction: Faction
+    let side: Int
+    var generation = 0
+    var orbitRate: Float = 0.185
+    var scanner: SCNNode?
     let pair: Int
     let trailing: Bool
     var position = V3.zero
@@ -199,13 +202,24 @@ final class Fighter {
     var collisionCooldown: Float = 20
     var formationHold: Float { entry == .hyperspace ? 2.1+Float(formationSlot)*0.13 : 0.8+Float(formationSlot)*0.08 }
     let warp = SCNNode()
-    init(faction: Faction, pair: Int, trailing: Bool, cooldown: Float) {
-        self.faction = faction; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
-        node = faction == .rebel ? xWing() : tieFighter()
+    init(faction: Faction, side: Int, pair: Int, trailing: Bool, cooldown: Float) {
+        self.faction = faction; self.side = side; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
+        node.addChildNode(faction.fighterModel())
+        scanner = node.childNode(withName:"scanner",recursively:true)
         let glow = material(color(0.55,0.85,1),emission:color(1.4,2.2,3))
         warp.addChildNode(box(V3(0.3,0.3,1),glow))
         warp.addChildNode(box(V3(0.85,0.85,1),material(color(0.15,0.4,1,0.25),emission:color(0.15,0.4,1,0.25))))
         warp.isHidden = true
+    }
+    func replaceFaction(_ replacement: Faction) {
+        for child in node.childNodes { child.removeFromParentNode() }
+        faction = replacement; generation += 1
+        node.addChildNode(replacement.fighterModel())
+        scanner = node.childNode(withName:"scanner",recursively:true)
+        state = .destroyed; node.isHidden = true; node.opacity = 1
+        node.simdScale = V3(repeating:1); warp.isHidden = true
+        entry = .none; entryTime = -1000; spin = nil; attackTarget = nil
+        arrival = 0; hitPoints = 6; collisionCooldown = 25
     }
 }
 struct Laser {
@@ -216,6 +230,7 @@ struct Laser {
     let target: Int
     let hits: Bool
     let faction: Faction
+    let targetGeneration: Int
 }
 struct Spark {
     enum Kind { case debris, ember, impact }
@@ -229,7 +244,7 @@ struct Spark {
     let kind: Kind
 }
 struct Transient {
-    enum Kind { case flash, light, arrival }
+    enum Kind { case flash, light, arrival, jump }
     let node: SCNNode
     let kind: Kind
     var life: Float
@@ -300,7 +315,18 @@ final class Dogfight {
     var effects: [Transient] = []
     var clouds: [GasCloud] = []
     var blasts: [ExplosionVolume] = []
-    var carrier: Carrier?
+    var carriers: [Carrier] = []
+    var carrier: Carrier? { director.featuredCarrier ?? carriers.first(where:{$0.start<=time}) ?? carriers.first }
+    var sideFactions: [Faction] = [.rebel,.empire]
+    var pendingSides = Set<Int>()
+    var fleetRequests: [FleetRequest] = []
+    var replacements: [FleetReplacement] = []
+    var replacementCount = 0
+    var encounteredFactions = Set<Faction>()
+    var nextArrivalTime: Float = 0
+    var persistentNodeCount = 0
+    var blinkArrivals = 0
+    var blinkDepartures = 0
     let director: CinematicDirector
     var carrierVisits = 0
     var carrierDepartures = 0
@@ -313,7 +339,7 @@ final class Dogfight {
     var arenaRotation = simd_quatf(angle:0,axis:V3(0,1,0))
     var orbitPhase: Float = 0
     var orbitRadius: Float = 110
-    var waveCountdown: Float?
+    var waveCountdown: Float? { fleetRequests.map(\.countdown).min() }
     var waveNumber = 0
     var reinforcements = 0
     var minimumFleet = 12
@@ -333,16 +359,16 @@ final class Dogfight {
     var shots = 0
     let cameraNames = ["ON THEIR SIX", "ASTEROID RUN", "THE BATTLEFIELD", "WINGMAN", "INTERCEPT VECTOR", "IN THE CROSSFIRE"]
     let cameraDetails = ["PURSUIT / ENGAGEMENT TRACKING", "LOW CAMERA / FLIGHT CORRIDOR", "WIDE ESTABLISHING SHOT", "LATERAL DOLLY / SQUADRON TRACKING", "FORWARD FLYBY / APPROACH CAMERA", "TWO-SHIP ENGAGEMENT CAMERA"]
-    let shotMaterialRed = material(color(1,0.13,0.045), emission: color(3,0.12,0.025))
-    let shotMaterialGreen = material(color(0.2,1,0.2), emission: color(0.15,3,0.15))
+    let projectileMaterials = Dictionary(uniqueKeysWithValues:Faction.allCases.map{($0,$0.shotMaterial())})
     let sparkMaterials = [material(color(1,0.7,0.2), emission: color(3,1.3,0.2)), material(color(1,0.25,0.06), emission: color(2,0.3,0.03)), material(color(0.6,0.6,0.6), metal: 0.8)]
 
     var activeCount: Int { fighters.filter(\.active).count }
     var rebelCount: Int { fighters.filter { $0.active && $0.faction == .rebel }.count }
     var empireCount: Int { fighters.filter { $0.active && $0.faction == .empire }.count }
     var arrivingCount: Int { fighters.filter { $0.state == .arriving }.count }
+    func sideCount(_ side: Int) -> Int { fighters.filter { $0.side == side && $0.active }.count }
 
-    init(seed: UInt64 = UInt64.random(in:1...UInt64.max)) {
+    init(seed: UInt64 = UInt64.random(in:1...UInt64.max), initialFactions: [Faction]? = nil, initialArrivals: Bool = true) {
         self.seed = seed
         rng = Random(state:seed)
         director = CinematicDirector(seed:seed)
@@ -382,16 +408,29 @@ final class Dogfight {
         makeRocks()
         makePlanet()
         makeClouds()
+        if let initialFactions, initialFactions.count == 2, initialFactions[0] != initialFactions[1] {
+            sideFactions = initialFactions
+        } else {
+            var options = Faction.allCases
+            let first = options.remove(at:rng.index(options.count))
+            sideFactions = [first,options[rng.index(options.count)]]
+        }
+        encounteredFactions.formUnion(sideFactions)
         for pair in 0..<6 {
-            let leader: Faction = pair % 2 == 0 ? .rebel : .empire
             for trailing in [false, true] {
-                let faction = trailing ? (leader == .rebel ? Faction.empire : Faction.rebel) : leader
-                let f = Fighter(faction:faction,pair:pair,trailing:trailing,cooldown:rng.range(0.2,2.0))
+                let side = trailing ? 1-pair%2 : pair%2
+                let f = Fighter(faction:sideFactions[side],side:side,pair:pair,trailing:trailing,cooldown:rng.range(0.2,2.0))
+                f.orbitRate = rng.range(0.17,0.21)
                 scene.rootNode.addChildNode(f.node)
                 scene.rootNode.addChildNode(f.warp)
                 fighters.append(f)
                 f.collisionCooldown = rng.range(15,45)
             }
+        }
+        persistentNodeCount = scene.rootNode.childNodes.count
+        if initialArrivals {
+            for f in fighters { f.state = .destroyed; f.node.isHidden = true }
+            deployReinforcements()
         }
         selectCameraSubject(); director.prepareShot(in:self)
         update(dt: 0)
@@ -481,7 +520,7 @@ final class Dogfight {
 
     func orbitPath(_ f: Fighter, _ t: Float) -> V3 {
         let phase = Float(f.pair) * tau / 6 + orbitPhase
-        let a = t * 0.185 + phase - (f.trailing ? 0.14 : 0)
+        let a = t * f.orbitRate + phase - (f.trailing ? 0.14 : 0)
         let radius = orbitRadius + Float(f.pair % 3) * 22
         var p = V3(sin(a)*radius + sin(a*2.0+phase)*24,
                    sin(a*2.0+phase)*30 + cos(a*3.0)*13,
@@ -521,6 +560,7 @@ final class Dogfight {
                 if !updateArrival(f) { continue }
             }
             f.node.simdPosition = f.position
+            f.scanner?.simdPosition.x = sin(time*3+Float(f.pair))*0.49
             let up = V3(sin(time*0.8+Float(f.pair))*0.22,1,cos(time*0.7+Float(f.pair))*0.12)
             f.node.look(at:SCNVector3(f.position+f.forward*20), up:SCNVector3(up), localFront:SCNVector3(0,0,-1))
             f.cooldown -= dt
@@ -546,19 +586,19 @@ final class Dogfight {
     }
     func fire(from: Int, to: Int, aimed: Bool = true) {
         let f = fighters[from], target = fighters[to]
-        let flightTime = simd_distance(f.position,target.position)/340
+        let speed = f.faction.projectileSpeed
+        let flightTime = simd_distance(f.position,target.position)/speed
         let predicted = path(target,time+flightTime)
         let hit = aimed && rng.next() < 0.20
         let right = unit(simd_cross(f.forward,V3(0,1,0)))
         for s: Float in [-1,1] {
-            let p = f.position+f.forward*4+right*s*(f.faction == .rebel ? 3.7 : 0.5)
-            let mat = f.faction == .rebel ? shotMaterialRed : shotMaterialGreen
-            let n = box(V3(0.12,0.12,4.2),mat,p)
+            let p = f.position+f.forward*4+right*s*f.faction.gunOffset
+            let n = box(V3(0.1,0.1,f.faction.usesBlinkFTL ? 1.3 : 4.2),projectileMaterials[f.faction]!,p)
             let spread = hit ? V3.zero : rng.vector(0.1)
             let direction = unit((aimed ? unit(predicted-p) : f.forward)+spread)
             n.simdOrientation = simd_quatf(from:V3(0,0,-1),to:direction)
             scene.rootNode.addChildNode(n)
-            lasers.append(Laser(node:n,position:p,velocity:direction*340,life:1.5,target:to,hits:hit,faction:f.faction))
+            lasers.append(Laser(node:n,position:p,velocity:direction*speed,life:1.5,target:to,hits:hit,faction:f.faction,targetGeneration:target.generation))
         }
         shots += 2
     }
@@ -574,7 +614,7 @@ final class Dogfight {
             let factor = max(0,min(1,simd_dot(target.position-old,travel)/max(0.001,simd_length_squared(travel))))
             let distance = simd_distance(old+travel*factor,target.position)
             var remove = lasers[i].life <= 0
-            if target.active && lasers[i].hits && distance < 4.5 {
+            if target.active && target.generation == lasers[i].targetGeneration && target.faction != lasers[i].faction && lasers[i].hits && distance < 4.5 {
                 target.hitPoints -= 1
                 burst(at:target.position,count:9,big:false)
                 remove = true
@@ -617,10 +657,10 @@ final class Dogfight {
                 let clearance: Float = f === cameraSubject() ? 17 : 10
                 if simd_length_squared(delta)<clearance*clearance { p = f.position+unit(delta)*clearance }
             }
-            if let ship = carrier, !ship.node.isHidden {
+            for ship in carriers where !ship.node.isHidden {
                 let inverse = ship.node.simdWorldTransform.inverse
                 let local = (inverse*SIMD4<Float>(p.x,p.y,p.z,1)).xyz
-                let bounds = V3(77,68,130)
+                let bounds = ship.cameraBounds
                 let normalized = local/bounds
                 if simd_length_squared(normalized)<1 {
                     let safe = unit(normalized)*bounds
@@ -755,7 +795,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.applicationIconImage = appIcon()
         buildMenu()
-        battle = Dogfight(seed:requestedSeed())
+        battle = Dogfight(seed:requestedSeed(),initialFactions:requestedFactions())
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1440,height:900)
         let width = min(1440,screen.width-80), height = min(900,screen.height-80)
         window = NSWindow(contentRect:NSRect(x:0,y:0,width:width,height:height),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
@@ -928,17 +968,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if now-lastHUD > 1 {
             lastHUD = now
             let duration = Int(now-startTime)
-            telemetry.stringValue = String(format:"%02d X-WINGS / %02d TIES   ·   WAVE %02d   ·   %02d:%02d:%02d",battle.rebelCount,battle.empireCount,battle.waveNumber,duration/3600,(duration/60)%60,duration%60)
+            telemetry.stringValue = String(format:"%02d %@ / %02d %@   ·   WAVE %02d   ·   %02d:%02d:%02d",battle.sideCount(0),battle.sideFactions[0].fighterName,battle.sideCount(1),battle.sideFactions[1].fighterName,battle.waveNumber,duration/3600,(duration/60)%60,duration%60)
             sector.stringValue = String(format:"PROCEDURAL ARENA  /  SECTOR %08llX",battle.seed & 0xFFFFFFFF)
-            if let countdown = battle.waveCountdown {
-                eventStatus.stringValue = String(format:"HYPERSPACE SIGNATURES  ·  ETA %02d SEC",max(0,Int(ceil(countdown))))
+            if let request = battle.fleetRequests.min(by:{$0.countdown<$1.countdown}) {
+                eventStatus.stringValue = String(format:"%@ INBOUND / ETA %02d SEC",battle.sideFactions[request.side].title,max(0,Int(ceil(request.countdown))))
                 eventStatus.textColor = cyan
-            } else if battle.fighters.contains(where:{$0.state == .arriving && $0.entry == .hyperspace}) {
+            } else if battle.fighters.contains(where:{$0.state == .arriving && $0.entry == .hyperspace && battle.time>=$0.entryTime-1.25}) {
                 eventStatus.stringValue = "X-WING FORMATION EXITING HYPERSPACE"
                 eventStatus.textColor = cyan
             } else if let ship = battle.carrier {
                 let age = battle.time-ship.start
-                eventStatus.stringValue = age<0 ? "IMPERIAL CARRIER APPROACHING" : (age<1.4 ? "CAPITAL SHIP EXITING HYPERSPACE" : (age<10 ? "HANGAR LAUNCH / TIE SQUADRON DEPLOYING" : "IMPERIAL CARRIER DEPARTING"))
+                if age<0 { eventStatus.stringValue = "\(ship.faction.carrierName) APPROACHING" }
+                else if age<ship.arrivalDuration { eventStatus.stringValue = ship.faction.usesBlinkFTL ? "FTL DISPLACEMENT DETECTED" : "CAPITAL SHIP EXITING HYPERSPACE" }
+                else if !ship.departing { eventStatus.stringValue = "HANGAR LAUNCH / \(ship.faction.fighterName) DEPLOYING" }
+                else { eventStatus.stringValue = "\(ship.faction.carrierName) DEPARTING" }
                 eventStatus.textColor = cyan
             } else {
                 eventStatus.stringValue = String(format:"%03d LOSSES   /   %03d REINFORCEMENTS",battle.destroyed,battle.reinforcements)
@@ -1007,12 +1050,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateCameraHUD(); showControls()
     }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:"1.2",.credits:NSAttributedString(string:"An endless, procedural X-wing and TIE fighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm.")])
+        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:"1.3",.credits:NSAttributedString(string:"An endless, procedural crossover starfighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars and Battlestar Galactica belong to their respective owners.")])
     }
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Cinematic automatic director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\n⌘Q       Quit and release keep awake\n\nX-wings jump in as a V formation, then peel off toward separate targets. TIE fighters launch from an arriving capital ship; the carrier then jumps away. Asteroid strikes can cause a recoverable spin or a fatal loss of control. The director follows these events automatically.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm."
+        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Cinematic automatic director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars and Battlestar Galactica belong to their respective owners."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }
@@ -1038,7 +1081,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard CommandLine.arguments.contains("--smoke-test"), let battle, let window else { return }
         let path = CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png"
         let output = URL(fileURLWithPath:path)
-        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"spinOuts":battle.spinOuts,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
+        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }

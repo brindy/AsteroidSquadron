@@ -1,10 +1,19 @@
 # Asteroid Squadron
 
-A standalone macOS app: X-wings and TIE fighters in an endless procedural dogfight through a 3D asteroid belt. An action-directed camera system, red and green laser fire, turbulent explosions that cool into smoke, formation arrivals, capital-ship hangar launches, drifting volumetric gas, a distant planet, and a quiet cinematic overlay. All geometry, density fields, and textures are generated locally. No dependencies, downloads, network access, or audio.
+A standalone macOS app: an endless crossover dogfight between Star Wars and the reimagined Battlestar Galactica in a procedural 3D asteroid belt. An action-directed camera system, faction-specific weapons, turbulent explosions that cool into smoke, formation arrivals, capital-ship hangar launches, drifting volumetric gas, a distant planet, and a quiet cinematic overlay. All ship meshes, geometry, density fields, and textures are generated locally. No dependencies, downloads, network access, or audio.
 
-Every launch chooses a fresh random seed for asteroid placement and shapes, cloud positions and density, planet placement, and flight orientation. **R** generates another arena without interrupting keep-awake. For a reproducible arena, launch with `--seed 42` (any unsigned 64-bit decimal integer).
+Every launch chooses a fresh random seed for asteroid placement and shapes, cloud positions and density, planet placement, flight orientation, and the initial pair of opposing factions. **R** generates another arena and faction pairing without interrupting keep-awake. For a reproducible arena, launch with `--seed 42` (any unsigned 64-bit decimal integer).
 
-Ships destroyed in combat stay lost until the active fleet drops to seven, or either faction drops to two. X-wing reinforcements jump together in a V formation, hold their offsets, then peel off on curved attack runs toward separately assigned targets. Standard TIE fighters never jump themselves: an Imperial capital ship exits hyperspace outside the asteroid belt, launches them from its ventral hangar, and jumps away after deployment.
+Each side starts with six fighters. Losses stay lost until that faction's **last ship is destroyed**. Its replacement is then randomly selected from the catalog, excluding the surviving opponent and the just-defeated faction. There are always two distinct factions; a weakened squadron does not get topped up early.
+
+| Faction | Fighters | Arrival |
+| --- | --- | --- |
+| Rebel Alliance | X-wings | Jump together in a V formation, then split toward separate targets |
+| Galactic Empire | TIE fighters | Launch from an Imperial capital ship that arrives and departs via hyperspace |
+| Colonial Fleet | Viper Mk II | Launch from Galactica's two flight pods |
+| Cylon Fleet | Reimagined Cylon Raiders | Launch from a modern, six-armed basestar |
+
+**Galactica and the basestar use BSG-style blink FTL:** a short blue-white displacement flash, the complete ship appearing at a fixed location, and another flash as it vanishes. The models neither stretch nor travel along a hyperspace trail. Vipers and Raiders deploy from their respective capital ships before those ships leave. Capital arrivals are staged so the camera can cover each deployment; simultaneous capital ships keep separate arrival locations.
 
 The automatic director mixes six shot styles with varied lengths: pursuit, low asteroid-corridor tracking, brief establishing shots, lateral dolly shots, forward flybys, and two-ship engagements. It chooses active, threatened ships near the action, uses damped movement and gentle lens changes within shots, and cuts to formation arrivals, carrier deployment and departure, and loss-of-control incidents. Disabling Auto preserves manual camera control.
 
@@ -21,7 +30,12 @@ Double-click **Start Dogfight.command**, or open **build/Asteroid Squadron.app**
 ./"Start Dogfight.command"
 # Optional:
 ./"Start Dogfight.command" --fullscreen
+# Start with the two BSG fleets (subsequent defeated factions still change randomly):
+./"Start Dogfight.command" --factions colonial,cylon
+# Other valid faction names: rebel, empire
 ```
+
+Quit an already-running instance before using startup arguments. The starting pair must contain two distinct factions.
 
 The app starts in a normal, resizable window, so agents can continue to use the desktop. Full screen is optional. Default rendering is 30 fps with 2× antialiasing to leave resources for agents; J toggles 60 fps / 4× antialiasing.
 
@@ -60,6 +74,6 @@ The overlay dims after nine seconds without mouse movement; move the pointer to 
 open "build/Asteroid Squadron.app" --args --smoke-test /tmp/asteroid-squadron.png
 ```
 
-The simulation check covers held V-formation offsets, individual target assignment, attack splits, carrier-only TIE deployment, manual camera control, both spin-out outcomes, and ten simulated minutes on each of three seeds. It checks normal flight and camera clearance, fleet attrition, event-camera coverage, carrier departure, finite positions, bounded effects, and exact scene-node cleanup. It also verifies seed randomization and reproducibility. The render review writes the six shot styles, explosion stages, formation arrivals and splits, carrier arrival/hangar/departure, and multiple views of both fighter meshes, exercising the actual GPU shaders. The smoke-test flag saves a snapshot and JSON runtime status, including native window bounds and full-screen/zoom state, while leaving the app running.
+The simulation check covers full-faction elimination, no partial refills, twelve forced replacements across the four-faction catalog, separate targets, model cleanup, and protection against old projectiles hitting a replacement generation. It checks that capital-ship hull meshes are closed and consistently oriented, and that both BSG capital ships blink at fixed positions and deploy the correct fighters. It also covers V-formation offsets, attack splits, manual camera control, spin-out outcomes, and ten simulated minutes on each of three seeds, checking clearance, camera coverage, bounded effects, exact scene-node cleanup, and seed reproducibility. The render review writes fighter and capital-ship model views, before/during/after blink frames, hangar deployment, cinematic camera styles, and explosion stages. The smoke-test flag saves a snapshot and JSON runtime status, including faction/replacement counts, blink events, native window bounds, and full-screen/zoom state, while leaving the app running.
 
-This is an unofficial personal fan project, not affiliated with Lucasfilm. Star Wars, X-wing, and TIE fighter names and designs belong to their respective owners.
+This is an unofficial personal fan project. Star Wars and Battlestar Galactica names and designs belong to their respective owners.

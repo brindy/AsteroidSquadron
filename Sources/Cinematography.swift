@@ -13,6 +13,7 @@ final class CinematicDirector {
     var event: Event = .none
     var eventAge: Float = 0
     var arrivalFlight: ArrivalFlight?
+    var featuredCarrier: Carrier?
     var coveredFlight: Float = -100
     var shotLength: Float = 7
     var velocity = V3.zero
@@ -37,15 +38,24 @@ final class CinematicDirector {
         event = newEvent; eventAge = 0; b.cut = true; b.wreckHold = 0
         switch newEvent {
         case .formation: caption = "SQUADRON INBOUND"; detail = "X-WING FORMATION / HYPERSPACE INSERTION"; formationCuts += 1
-        case .carrierArrival: caption = "IMPERIAL REINFORCEMENTS"; detail = "CARRIER ARRIVAL / HANGAR DEPLOYMENT"; carrierCuts += 1
-        case .carrierDeparture: caption = "JUMP TO HYPERSPACE"; detail = "CAPITAL SHIP DEPARTURE"
+        case .carrierArrival:
+            caption = featuredCarrier?.faction.carrierName ?? "CAPITAL SHIP INBOUND"
+            detail = featuredCarrier?.faction.usesBlinkFTL == true ? "FTL BLINK / SQUADRON DEPLOYMENT" : "HYPERSPACE ARRIVAL / HANGAR DEPLOYMENT"
+            carrierCuts += 1
+        case .carrierDeparture:
+            caption = featuredCarrier?.faction.usesBlinkFTL == true ? "FTL JUMP" : "JUMP TO HYPERSPACE"
+            detail = "CAPITAL SHIP DEPARTURE"
         case .spin: caption = "LOSS OF CONTROL"; detail = "ASTEROID STRIKE / RECOVERY TRACKING"; dangerCuts += 1
-        case .none: caption = nil; detail = nil
+        case .none: caption = nil; detail = nil; featuredCarrier = nil
         }
         b.cameraChanged?()
     }
-    func requestCarrierArrival(in b: Dogfight) { if b.automatic { begin(.carrierArrival,in:b) } }
-    func requestCarrierDeparture(in b: Dogfight) { if b.automatic { begin(.carrierDeparture,in:b) } }
+    func requestCarrierArrival(_ ship: Carrier, in b: Dogfight) {
+        if b.automatic { featuredCarrier = ship; begin(.carrierArrival,in:b) }
+    }
+    func requestCarrierDeparture(_ ship: Carrier, in b: Dogfight) {
+        if b.automatic { featuredCarrier = ship; begin(.carrierDeparture,in:b) }
+    }
     func requestSpin(_ index: Int, in b: Dogfight) {
         guard b.automatic, event == .none, b.time-lastDangerTime>8, b.cameraAge>2 else { return }
         lastDangerTime = b.time; b.followedIndex = index; begin(.spin,in:b)
@@ -75,7 +85,7 @@ final class CinematicDirector {
     func update(_ dt: Float, in b: Dogfight) {
         eventAge += dt; shake *= exp(-dt*8)
         if !b.automatic && event != .none { begin(.none,in:b) }
-        if b.automatic, let flight = arrivalFlight, flight.start>coveredFlight, b.time-flight.start<1.1 {
+        if b.automatic, let flight = arrivalFlight, flight.start>coveredFlight, b.time>=flight.start, b.time-flight.start<1.1 {
             coveredFlight = flight.start; begin(.formation,in:b)
         }
         if event == .none && b.automatic && b.cameraAge>shotLength { b.nextCamera() }
@@ -94,15 +104,18 @@ final class CinematicDirector {
         } else if event == .carrierArrival || event == .carrierDeparture, let ship = b.carrier {
             let age = b.time-ship.start, right = unit(simd_cross(ship.forward,up))
             let anchor = ship.station(age)
+            let framing = ship.framingScale
             if event == .carrierArrival {
-                let dolly = min(1,max(0,(age-1.4)/2.7))
-                desired = anchor+right*(220-dolly*65)+up*(85-dolly*123)+ship.forward*(180-dolly*45)
-                look = anchor+ship.forward*(dolly*22)-up*(dolly*11); fov = 50
+                let dolly = min(1,max(0,(age-ship.arrivalDuration)/2.7))
+                let low: Float = ship.faction == .colonial ? 25 : -38
+                desired = anchor+(right*(220-dolly*65)+up*(85+dolly*(low-85))+ship.forward*(180-dolly*45))*framing
+                look = anchor+ship.forward*(dolly*(ship.faction == .colonial ? 55 : 22))-up*(dolly*7); fov = 50
                 if age>6.4 { endEvent(in:b,follow:ship.squadron.first); update(0,in:b); return }
             } else {
-                desired = anchor+right*310+up*100+ship.forward*220
-                look = anchor+ship.forward*min(190,max(0,age-10)*115); fov = 51
-                if eventAge>2 { endEvent(in:b); update(0,in:b); return }
+                desired = anchor+(right*310+up*100+ship.forward*220)*framing
+                look = ship.faction.usesBlinkFTL ? anchor : anchor+ship.forward*min(190,max(0,age-ship.departureAge)*115)
+                fov = 51
+                if eventAge>(ship.faction.usesBlinkFTL ? 0.65 : 2) { endEvent(in:b); update(0,in:b); return }
             }
         } else if event == .carrierArrival || event == .carrierDeparture {
             endEvent(in:b); update(0,in:b); return
@@ -184,7 +197,7 @@ extension Dogfight {
         return cameraIndex == 2 || !fighters[followedIndex].active ? nil : fighters[followedIndex]
     }
     func selectCameraSubject() {
-        let faction: Faction? = cameraIndex == 0 ? .rebel : (cameraIndex == 1 ? .empire : nil)
+        let faction: Faction? = cameraIndex == 0 ? sideFactions[0] : (cameraIndex == 1 ? sideFactions[1] : nil)
         let choices = fighters.indices.filter { fighters[$0].active && (faction == nil || fighters[$0].faction == faction) }
         let pool = choices.isEmpty ? fighters.indices.filter { fighters[$0].active } : choices
         var best = -Float.infinity

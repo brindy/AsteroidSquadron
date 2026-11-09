@@ -89,6 +89,27 @@ private func flashMaterial() -> SCNMaterial {
 }
 
 extension Dogfight {
+    func jumpPulse(at position: V3, radius: Float) {
+        let size = 96
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:size,pixelsHigh:size,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:size*4,bitsPerPixel:32)!
+        let data = bitmap.bitmapData!
+        for y in 0..<size { for x in 0..<size {
+            let dx = Float(x-48)/48, dy = Float(y-48)/48
+            let r = sqrt(dx*dx+dy*dy)
+            let alpha = pow(max(0,1-r),2.5)
+            let i = (y*size+x)*4
+            data[i] = UInt8(alpha*205); data[i+1] = UInt8(alpha*235)
+            data[i+2] = UInt8(alpha*255); data[i+3] = UInt8(alpha*255)
+        } }
+        let image = NSImage(size:NSSize(width:size,height:size)); image.addRepresentation(bitmap)
+        let m = SCNMaterial(); m.lightingModel = .constant
+        m.diffuse.contents = image; m.emission.contents = image; m.emission.intensity = 2.5
+        m.blendMode = .add; m.writesToDepthBuffer = false; m.readsFromDepthBuffer = false
+        let flash = node(SCNPlane(width:CGFloat(radius*2),height:CGFloat(radius*2)),m,position)
+        flash.constraints = [SCNBillboardConstraint()]; flash.renderingOrder = 100
+        scene.rootNode.addChildNode(flash)
+        effects.append(Transient(node:flash,kind:.jump,life:0.38,duration:0.38))
+    }
     func burst(at p: V3, count: Int, big: Bool, velocity: V3 = .zero) {
         let debris = material(color(0.25,0.29,0.3),metal:0.8)
         let hotEdge = material(color(0.16,0.13,0.1),emission:color(0.7,0.12,0.01),metal:0.6)
@@ -144,6 +165,7 @@ extension Dogfight {
             case .flash: n.opacity = CGFloat(t*t); n.simdScale = V3(repeating:0.6+age*1.4)
             case .light: n.light?.intensity = CGFloat(5000*exp(-age*8))
             case .arrival: n.simdScale = V3(repeating:0.3+t*3); n.opacity = CGFloat(t)
+            case .jump: n.simdScale = V3(repeating:0.35+age*1.2); n.opacity = CGFloat(t*t)
             }
             if effects[i].life<=0 { n.removeFromParentNode(); effects.remove(at:i) }
         }
