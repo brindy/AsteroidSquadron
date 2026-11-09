@@ -45,7 +45,7 @@ func box(_ size: V3, _ mat: SCNMaterial, _ p: V3 = .zero, chamfer: CGFloat = 0) 
 }
 func cylinder(_ radius: CGFloat, _ length: CGFloat, _ mat: SCNMaterial, _ p: V3 = .zero) -> SCNNode {
     let g = SCNCylinder(radius: radius, height: length)
-    g.radialSegmentCount = 10
+    g.radialSegmentCount = 16
     let n = node(g, mat, p)
     n.eulerAngles.x = .pi / 2
     return n
@@ -60,6 +60,23 @@ func segment(_ from: V3, _ to: V3, radius: CGFloat, mat: SCNMaterial) -> SCNNode
 
 enum Faction { case rebel, empire }
 
+// Closed, flat-shaded convex hull; every face has an explicit outward normal.
+func hullMesh(_ vertices: [V3], faces: [[Int]], mat: SCNMaterial) -> SCNNode {
+    let center = vertices.reduce(V3.zero,+) / Float(vertices.count)
+    var positions: [SCNVector3] = [], normals: [SCNVector3] = []
+    for face in faces {
+        for i in 1..<(face.count-1) {
+            var triangle = [vertices[face[0]],vertices[face[i]],vertices[face[i+1]]]
+            var normal = unit(simd_cross(triangle[1]-triangle[0],triangle[2]-triangle[0]))
+            if simd_dot(normal,triangle[0]-center)<0 { triangle.swapAt(1,2); normal = -normal }
+            positions += triangle.map(SCNVector3.init)
+            normals += Array(repeating:SCNVector3(normal),count:3)
+        }
+    }
+    let g = SCNGeometry(sources:[SCNGeometrySource(vertices:positions),SCNGeometrySource(normals:normals)],elements:[SCNGeometryElement(indices:Array(0..<Int32(positions.count)),primitiveType:.triangles)])
+    return node(g,mat)
+}
+
 func xWing() -> SCNNode {
     let root = SCNNode()
     let hull = material(color(0.68, 0.72, 0.71), metal: 0.55)
@@ -69,19 +86,22 @@ func xWing() -> SCNNode {
     let glass = material(color(0.035, 0.12, 0.17), emission: color(0.015, 0.05, 0.075), metal: 0.85)
     let glow = material(color(1, 0.22, 0.36), emission: color(2.5, 0.27, 0.55))
     root.addChildNode(box(V3(1.35, 0.9, 4.3), hull, V3(0, 0, -0.2), chamfer: 0.3))
-    let nose = SCNCone(topRadius: 0.12, bottomRadius: 0.68, height: 4.7)
-    nose.radialSegmentCount = 4
-    let n = node(nose, pale, V3(0, -0.02, -4.15))
-    n.eulerAngles = SCNVector3(-Float.pi / 2, Float.pi / 4, 0)
-    root.addChildNode(n)
-    root.addChildNode(box(V3(0.075, 0.075, 4.2), red, V3(0, 0.52, -3.45)))
+    root.addChildNode(hullMesh([
+        V3(-0.65,-0.4,-1.65), V3(0.65,-0.4,-1.65), V3(0.65,0.4,-1.65), V3(-0.65,0.4,-1.65),
+        V3(-0.11,-0.08,-6.45), V3(0.11,-0.08,-6.45), V3(0.11,0.08,-6.45), V3(-0.11,0.08,-6.45)
+    ],faces:[[0,1,2,3],[4,7,6,5],[0,4,5,1],[3,2,6,7],[0,3,7,4],[1,5,6,2]],mat:pale))
+    let stripe = box(V3(0.10,0.025,4.76),red,V3(0,0.255,-4.04))
+    stripe.simdEulerAngles.x = -atan2(0.32,4.8)
+    root.addChildNode(stripe)
     let cockpit = box(V3(0.9, 0.58, 1.65), glass, V3(0, 0.62, -0.85), chamfer: 0.19)
     cockpit.eulerAngles.x = -0.1
     root.addChildNode(cockpit)
     root.addChildNode(box(V3(0.95, 0.09, 0.085), pale, V3(0, 0.94, -0.5)))
     root.addChildNode(box(V3(1.45, 0.12, 2), red, V3(0, -0.48, 0.5)))
     // Astromech dome behind the cockpit.
-    root.addChildNode(cylinder(0.31, 0.45, pale, V3(0, 0.65, 0.55)))
+    let droid = cylinder(0.28,0.30,pale,V3(0,0.59,0.55))
+    droid.simdOrientation = simd_quatf(angle:0,axis:V3(0,1,0))
+    root.addChildNode(droid)
     root.addChildNode(node(SCNSphere(radius: 0.31), material(color(0.12, 0.3, 0.65), metal: 0.8), V3(0, 0.88, 0.55)))
     for sx: Float in [-1, 1] {
         for sy: Float in [-1, 1] {
@@ -94,6 +114,8 @@ func xWing() -> SCNNode {
             foil.addChildNode(cylinder(0.13, 4.6, dark, V3(sx * 4.2, 0, -0.9)))
             foil.addChildNode(cylinder(0.08, 1.5, pale, V3(sx * 4.2, 0, -3.3)))
             foil.addChildNode(cylinder(0.43, 2.7, hull, V3(sx * 1.15, 0, 0.6)))
+            foil.addChildNode(cylinder(0.34,0.05,dark,V3(sx * 1.15,0,-0.77)))
+            foil.addChildNode(cylinder(0.12,0.07,hull,V3(sx * 1.15,0,-0.81)))
             foil.addChildNode(cylinder(0.34, 0.2, dark, V3(sx * 1.15, 0, 2.02)))
             foil.addChildNode(cylinder(0.245, 0.23, glow, V3(sx * 1.15, 0, 2.14)))
             let flame = node(SCNSphere(radius: 1), glow, V3(sx * 1.15, 0, 2.53))
@@ -126,7 +148,7 @@ func tieFighter() -> SCNNode {
         let p: [V3] = [V3(0,-3.7,-1.8), V3(0,-2.6,2.3), V3(0,2.6,2.3), V3(0,3.7,-1.8), V3(0,2.5,-3), V3(0,-2.5,-3)]
         let vertices = p.map { SCNVector3($0 + V3(s * 3.1, 0, 0)) }
         let indices: [Int32] = [0,1,2, 0,2,3, 0,3,4, 0,4,5]
-        let geo = SCNGeometry(sources: [SCNGeometrySource(vertices: vertices)], elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+        let geo = SCNGeometry(sources: [SCNGeometrySource(vertices: vertices),SCNGeometrySource(normals:Array(repeating:SCNVector3(s,0,0),count:vertices.count))], elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
         let pm = panel.copy() as! SCNMaterial
         pm.isDoubleSided = true
         root.addChildNode(node(geo, pm))
@@ -160,11 +182,20 @@ final class Fighter {
     var position = V3.zero
     var forward = V3(0, 0, -1)
     var cooldown: Float
-    var respawn: Float = 0
-    var hitPoints = 4
+    enum State { case active, destroyed, arriving }
+    var state: State = .active
+    var active: Bool { state == .active }
+    var arrival: Float = 0
+    var arrivalDelay: Float = 0
+    var hitPoints = 6
+    let warp = SCNNode()
     init(faction: Faction, pair: Int, trailing: Bool, cooldown: Float) {
         self.faction = faction; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
         node = faction == .rebel ? xWing() : tieFighter()
+        let glow = material(color(0.55,0.85,1),emission:color(1.4,2.2,3))
+        warp.addChildNode(box(V3(0.3,0.3,1),glow))
+        warp.addChildNode(box(V3(0.85,0.85,1),material(color(0.15,0.4,1,0.25),emission:color(0.15,0.4,1,0.25))))
+        warp.isHidden = true
     }
 }
 struct Laser {
@@ -183,6 +214,13 @@ struct Spark {
     var life: Float
     let duration: Float
     let scale: Float
+}
+struct Transient {
+    enum Kind { case fireball, ring, light, arrival }
+    let node: SCNNode
+    let kind: Kind
+    var life: Float
+    let duration: Float
 }
 
 func rockGeometry(seed: UInt64) -> SCNGeometry {
@@ -219,10 +257,10 @@ func rockGeometry(seed: UInt64) -> SCNGeometry {
     return SCNGeometry(sources: [SCNGeometrySource(vertices: flat), SCNGeometrySource(normals: normals), SCNGeometrySource(textureCoordinates: uv)], elements: [SCNGeometryElement(indices: (0..<Int32(flat.count)).map{$0}, primitiveType: .triangles)])
 }
 
-func stoneTexture() -> NSImage {
+func stoneTexture(seed: UInt64) -> NSImage {
     let size = 256
     let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: size*4, bitsPerPixel: 32)!
-    var rng = Random(state: 0xA57E201D)
+    var rng = Random(state: seed)
     let data = bitmap.bitmapData!
     for y in 0..<size {
         for x in 0..<size {
@@ -246,7 +284,20 @@ final class Dogfight {
     var rocks: [Rock] = []
     var lasers: [Laser] = []
     var sparks: [Spark] = []
-    var rng = Random()
+    var effects: [Transient] = []
+    var clouds: [GasCloud] = []
+    let seed: UInt64
+    var rng: Random
+    var arenaRotation = simd_quatf(angle:0,axis:V3(0,1,0))
+    var orbitPhase: Float = 0
+    var orbitRadius: Float = 110
+    var waveCountdown: Float?
+    var waveNumber = 0
+    var reinforcements = 0
+    var minimumFleet = 12
+    var followedIndex = 0
+    var wreckHold: Float = 0
+    var wreckPosition = V3.zero
     var time: Float = 0
     var cameraAge: Float = 0
     var cameraIndex = 0
@@ -264,7 +315,17 @@ final class Dogfight {
     let shotMaterialGreen = material(color(0.2,1,0.2), emission: color(0.15,3,0.15))
     let sparkMaterials = [material(color(1,0.7,0.2), emission: color(3,1.3,0.2)), material(color(1,0.25,0.06), emission: color(2,0.3,0.03)), material(color(0.6,0.6,0.6), metal: 0.8)]
 
-    init() {
+    var activeCount: Int { fighters.filter(\.active).count }
+    var rebelCount: Int { fighters.filter { $0.active && $0.faction == .rebel }.count }
+    var empireCount: Int { fighters.filter { $0.active && $0.faction == .empire }.count }
+    var arrivingCount: Int { fighters.filter { $0.state == .arriving }.count }
+
+    init(seed: UInt64 = UInt64.random(in:1...UInt64.max)) {
+        self.seed = seed
+        rng = Random(state:seed)
+        arenaRotation = simd_quatf(angle:rng.range(0,tau),axis:V3(0,1,0)) * simd_quatf(angle:rng.range(-0.35,0.35),axis:V3(0,0,1))
+        orbitPhase = rng.range(0,tau)
+        orbitRadius = rng.range(100,130)
         scene.background.contents = color(0.003,0.007,0.016)
         scene.fogColor = color(0.009,0.017,0.03)
         scene.fogStartDistance = 1000; scene.fogEndDistance = 3300
@@ -297,12 +358,14 @@ final class Dogfight {
         makeStars()
         makeRocks()
         makePlanet()
+        makeClouds()
         for pair in 0..<6 {
             let leader: Faction = pair % 2 == 0 ? .rebel : .empire
             for trailing in [false, true] {
                 let faction = trailing ? (leader == .rebel ? Faction.empire : Faction.rebel) : leader
                 let f = Fighter(faction:faction,pair:pair,trailing:trailing,cooldown:rng.range(0.2,2.0))
                 scene.rootNode.addChildNode(f.node)
+                scene.rootNode.addChildNode(f.warp)
                 fighters.append(f)
             }
         }
@@ -321,38 +384,24 @@ final class Dogfight {
         m.lightingModel = .constant; m.readsFromDepthBuffer = false; m.writesToDepthBuffer = false
         let stars = node(g,m); stars.renderingOrder = -10
         scene.rootNode.addChildNode(stars)
-        // Faint dust clouds give the black sky depth without a downloaded skybox.
-        for i in 0..<20 {
-            let p = V3(Float(i-10)*280, sin(Float(i)*0.35)*240+700, -3500)
-            let cloud = SCNPlane(width: 1800, height: 1000)
-            let cm = SCNMaterial(); cm.lightingModel = .constant
-            cm.diffuse.contents = nebulaTexture()
-            cm.blendMode = .add; cm.writesToDepthBuffer = false; cm.isDoubleSided = true
-            let n = node(cloud,cm,p); n.simdEulerAngles.z = Float(i)*0.5; n.renderingOrder = -20
-            scene.rootNode.addChildNode(n)
-        }
     }
-    func nebulaTexture() -> NSImage {
-        let size = 128
-        let bitmap = NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:size,pixelsHigh:size,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:size*4,bitsPerPixel:32)!
-        let data = bitmap.bitmapData!
-        for y in 0..<size {
-            for x in 0..<size {
-                let dx = Float(x-64)/64, dy = Float(y-64)/64
-                let intensity = pow(max(0,1-dx*dx-dy*dy),3)
-                let i = (y*size+x)*4
-                data[i] = 12; data[i+1] = 29; data[i+2] = 49
-                data[i+3] = UInt8(intensity*22)
-            }
+    func makeClouds() {
+        let palettes = [color(0.19,0.37,0.49),color(0.31,0.23,0.43),color(0.16,0.39,0.37)]
+        for i in 0..<9 {
+            let a = Float(i)*tau/9+rng.range(-0.25,0.25)
+            let radius = rng.range(200,470)
+            let p = arenaRotation.act(V3(sin(a)*radius,rng.range(-150,110),cos(a)*radius))
+            let cloud = GasCloud(position:p,scale:V3(rng.range(160,255),rng.range(65,135),rng.range(140,230)),tint:palettes[i%palettes.count],seed:rng.range(0,100))
+            clouds.append(cloud)
+            scene.rootNode.addChildNode(cloud.node)
         }
-        let image = NSImage(size:NSSize(width:size,height:size)); image.addRepresentation(bitmap)
-        return image
     }
     func makeRocks() {
-        let texture = stoneTexture()
+        let texture = stoneTexture(seed:seed)
         var geometries: [SCNGeometry] = []
-        for i in 0..<12 {
-            let g = rockGeometry(seed: UInt64(i+1)*234879)
+        for _ in 0..<12 {
+            _ = rng.next()
+            let g = rockGeometry(seed:rng.state)
             let m = material(color(0.47,0.43,0.38),metal:0.13)
             m.diffuse.contents = texture
             m.roughness.contents = 0.94
@@ -363,30 +412,42 @@ final class Dogfight {
             var r: Float
             if i < 75 {
                 let a = rng.range(0,tau), rad = rng.range(65,280)
-                p = V3(sin(a)*rad,rng.range(-115,115),cos(a)*rad)
+                p = arenaRotation.act(V3(sin(a)*rad,rng.range(-115,115),cos(a)*rad))
                 r = rng.range(2.5,11)
             } else {
-                p = rng.vector(850)
+                p = unit(rng.vector(1))*rng.range(350,1000)
                 r = rng.range(5,42)
             }
-            // A few hero asteroids make close passes easy to read.
-            if i == 0 { p = V3(0,-46,0); r = 29 }
-            if i == 1 { p = V3(155,18,-100); r = 24 }
+            if i < 2 { r = rng.range(20,29) }
             let n = SCNNode(geometry:geometries[i%geometries.count])
-            n.simdPosition = p
             n.simdScale = V3(r*rng.range(0.8,1.35),r*rng.range(0.7,1.2),r)
             n.simdEulerAngles = rng.vector(.pi)
+            let bounds = max(n.simdScale.x,max(n.simdScale.y,n.simdScale.z))*1.25
+            // Rejection sampling leaves navigable gaps instead of intersecting exclusion shells.
+            let margin: Float = i<75 ? 24 : 12
+            for _ in 0..<200 {
+                if !rocks.contains(where:{ simd_distance($0.position,p)<$0.radius+bounds+margin }) { break }
+                if i<75 {
+                    let angle = rng.range(0,tau), radius = rng.range(65,300)
+                    p = arenaRotation.act(V3(sin(angle)*radius,rng.range(-125,125),cos(angle)*radius))
+                } else {
+                    p = unit(rng.vector(1))*rng.range(350,1000)
+                }
+            }
+            n.simdPosition = p
             scene.rootNode.addChildNode(n)
-            rocks.append(Rock(node:n,position:p,radius:r*1.5,spin:rng.vector(0.035)))
+            rocks.append(Rock(node:n,position:p,radius:bounds,spin:rng.vector(0.035)))
         }
     }
     func makePlanet() {
-        let g = SCNSphere(radius: 440); g.segmentCount = 72
-        let m = material(color(0.045,0.11,0.16), metal:0.15)
+        let g = SCNSphere(radius:CGFloat(rng.range(300,480))); g.segmentCount = 72
+        let tint = rng.range(0.5,1)
+        let m = material(color(CGFloat(0.055*tint),CGFloat(0.13*tint),CGFloat(0.19*tint)), metal:0.15)
         m.roughness.contents = 0.9
-        let n = node(g,m,V3(-1050,350,-2400))
+        let a = rng.range(0,tau)
+        let n = node(g,m,V3(sin(a)*2400,rng.range(100,650),cos(a)*2400))
         scene.rootNode.addChildNode(n)
-        let atmosphere = SCNSphere(radius:450); atmosphere.segmentCount = 72
+        let atmosphere = SCNSphere(radius:g.radius*1.023); atmosphere.segmentCount = 72
         let am = SCNMaterial(); am.diffuse.contents = color(0.08,0.35,0.5,0.06)
         am.emission.contents = color(0.04,0.15,0.22,0.05)
         am.transparency = 0.12; am.isDoubleSided = false; am.writesToDepthBuffer = false
@@ -394,21 +455,26 @@ final class Dogfight {
     }
 
     func path(_ f: Fighter, _ t: Float) -> V3 {
-        let phase = Float(f.pair) * tau / 6
+        let phase = Float(f.pair) * tau / 6 + orbitPhase
         let a = t * 0.185 + phase - (f.trailing ? 0.14 : 0)
-        let radius = 110 + Float(f.pair % 3) * 22
+        let radius = orbitRadius + Float(f.pair % 3) * 22
         var p = V3(sin(a)*radius + sin(a*2.0+phase)*24,
                    sin(a*2.0+phase)*30 + cos(a*3.0)*13,
                    cos(a)*radius*0.8 + sin(a*3.0+phase)*17)
-        // Smoothly bend flight corridors around nearby asteroid hulls.
-        for rock in rocks.prefix(75) {
-            let delta = p-rock.position
-            let clearance = rock.radius + 16
-            let distance = simd_length(delta)
-            if distance < clearance {
-                let push = (clearance-distance) / clearance
-                p += unit(delta) * (push*push*clearance*0.85)
+        p = arenaRotation.act(p)
+        // Project the entire fighter hull outside conservative asteroid bounds.
+        // Repeat for neighboring rocks; the old soft nudge allowed actual overlap.
+        for _ in 0..<8 {
+            var moved = false
+            for rock in rocks.prefix(75) {
+                let delta = p-rock.position
+                let clearance = rock.radius + 9
+                if simd_length_squared(delta) < clearance*clearance {
+                    p = rock.position + unit(delta)*(clearance+0.01)
+                    moved = true
+                }
             }
+            if !moved { break }
         }
         return p
     }
@@ -419,47 +485,65 @@ final class Dogfight {
         if automatic && cameraAge > 14 { nextCamera() }
         for rock in rocks { rock.node.simdEulerAngles += rock.spin * dt }
         for f in fighters {
-            f.position = path(f,time)
-            f.forward = unit(path(f,time+0.07)-f.position)
+            guard f.state != .destroyed else { continue }
+            let destination = path(f,time)
+            f.forward = unit(path(f,time+0.07)-destination)
+            f.position = destination
+            if f.state == .arriving {
+                f.arrivalDelay -= dt
+                if f.arrivalDelay > 0 { continue }
+                f.warp.isHidden = false
+                f.arrival = min(1,f.arrival+dt/1.25)
+                let remaining = 1-f.arrival
+                f.position -= f.forward*1400*pow(remaining,4)
+                // The hyperspace streak arrives first; reveal the solid hull only in its
+                // cleared landing corridor, so it cannot slice through rocks en route.
+                f.node.isHidden = f.arrival<0.82
+                f.node.opacity = CGFloat(max(0,min(1,(f.arrival-0.82)/0.1)))
+                let length = max(1,remaining*240)
+                f.warp.simdPosition = f.position-f.forward*length*0.5
+                f.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:f.forward)
+                f.warp.simdScale = V3(1,1,length)
+                f.warp.opacity = CGFloat(remaining)
+                if f.arrival >= 1 {
+                    f.state = .active; f.node.opacity = 1; f.warp.isHidden = true
+                    arrivalFlash(at:destination)
+                    reinforcements += 1
+                }
+            }
             f.node.simdPosition = f.position
             let up = V3(sin(time*0.8+Float(f.pair))*0.22,1,cos(time*0.7+Float(f.pair))*0.12)
             f.node.look(at:SCNVector3(f.position+f.forward*20), up:SCNVector3(up), localFront:SCNVector3(0,0,-1))
-            if f.respawn > 0 {
-                f.respawn -= dt
-                if f.respawn <= 0 { f.node.isHidden = false; f.hitPoints = 4 }
-            }
             f.cooldown -= dt
         }
         for i in 0..<fighters.count {
             let f = fighters[i]
-            guard f.cooldown <= 0, f.respawn <= 0 else { continue }
-            let target = i ^ 1
-            guard fighters[target].respawn <= 0 else { continue }
-            if f.trailing {
-                fire(from:i,to:target)
-                f.cooldown = rng.range(0.28,0.75)
-            } else if rng.next() < 0.025 {
-                // Leaders occasionally fire a long burst into the field.
-                fire(from:i,to:(i+3)%fighters.count,aimed:false)
-                f.cooldown = rng.range(0.8,1.8)
-            }
+            guard f.cooldown <= 0, f.active else { continue }
+            let enemies = fighters.indices.filter { fighters[$0].active && fighters[$0].faction != f.faction }
+            let inFront = enemies.filter { simd_dot(unit(fighters[$0].position-f.position),f.forward)>0.05 }
+            let target = inFront.min { simd_distance_squared(fighters[$0].position,f.position)<simd_distance_squared(fighters[$1].position,f.position) }
+            if let target { fire(from:i,to:target) }
+            f.cooldown = rng.range(0.35,0.95)
         }
         updateLasers(dt)
         updateSparks(dt)
+        updateEffects(dt)
+        updateReinforcements(dt)
         updateCamera(dt)
+        for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
     }
     func fire(from: Int, to: Int, aimed: Bool = true) {
         let f = fighters[from], target = fighters[to]
-        let predicted = path(target,time+0.1)
-        let aim = aimed ? unit(predicted-f.position) : f.forward
-        let hit = aimed && rng.next() < 0.2 && cameraAge > 3
+        let flightTime = simd_distance(f.position,target.position)/340
+        let predicted = path(target,time+flightTime)
+        let hit = aimed && rng.next() < 0.20
         let right = unit(simd_cross(f.forward,V3(0,1,0)))
         for s: Float in [-1,1] {
             let p = f.position+f.forward*4+right*s*(f.faction == .rebel ? 3.7 : 0.5)
             let mat = f.faction == .rebel ? shotMaterialRed : shotMaterialGreen
             let n = box(V3(0.12,0.12,4.2),mat,p)
-            let spread = hit ? V3.zero : rng.vector(0.08)
-            let direction = unit(aim+spread)
+            let spread = hit ? V3.zero : rng.vector(0.1)
+            let direction = unit((aimed ? unit(predicted-p) : f.forward)+spread)
             n.simdOrientation = simd_quatf(from:V3(0,0,-1),to:direction)
             scene.rootNode.addChildNode(n)
             lasers.append(Laser(node:n,position:p,velocity:direction*340,life:1.5,target:to,hits:hit,faction:f.faction))
@@ -478,20 +562,52 @@ final class Dogfight {
             let factor = max(0,min(1,simd_dot(target.position-old,travel)/max(0.001,simd_length_squared(travel))))
             let distance = simd_distance(old+travel*factor,target.position)
             var remove = lasers[i].life <= 0
-            if target.respawn <= 0 && lasers[i].hits && distance < 6 {
+            if target.active && lasers[i].hits && distance < 4.5 {
                 target.hitPoints -= 1
                 burst(at:target.position,count:9,big:false)
                 remove = true
                 if target.hitPoints <= 0 {
-                    // Preserve a stable camera subject; other ships regenerate offscreen.
-                    if target !== cameraSubject() {
-                        burst(at:target.position,count:55,big:true)
-                        target.respawn = 4.5; target.node.isHidden = true; destroyed += 1
-                    }
+                    destroy(target)
                 }
             }
             if remove { lasers[i].node.removeFromParentNode(); lasers.remove(at:i) }
         }
+    }
+    func destroy(_ fighter: Fighter) {
+        guard fighter.active else { return }
+        if fighter === cameraSubject(), cameraIndex != 2 {
+            wreckHold = 1.15; wreckPosition = fighter.position
+        }
+        burst(at:fighter.position,count:75,big:true)
+        fighter.state = .destroyed; fighter.node.isHidden = true; fighter.warp.isHidden = true
+        destroyed += 1
+        minimumFleet = min(minimumFleet,activeCount)
+    }
+
+    func updateReinforcements(_ dt: Float) {
+        // Wait for meaningful attrition, then bring back a staggered wave.
+        if waveCountdown == nil && arrivingCount == 0 && (activeCount <= 7 || rebelCount <= 2 || empireCount <= 2) {
+            waveCountdown = rng.range(3.5,5.5)
+        }
+        guard let countdown = waveCountdown else { return }
+        waveCountdown = countdown-dt
+        if countdown <= dt {
+            var index = 0
+            for f in fighters where f.state == .destroyed {
+                f.state = .arriving; f.arrival = 0; f.arrivalDelay = Float(index)*0.24
+                f.hitPoints = 6; f.cooldown = rng.range(0.4,1.2)
+                index += 1
+            }
+            waveNumber += 1; waveCountdown = nil
+        }
+    }
+
+    func arrivalFlash(at p: V3) {
+        let m = material(color(0.5,0.8,1),emission:color(1.1,1.8,2.5))
+        let g = SCNSphere(radius:1); g.segmentCount = 12
+        let n = node(g,m,p); n.simdScale = V3(3,3,3)
+        scene.rootNode.addChildNode(n)
+        effects.append(Transient(node:n,kind:.arrival,life:0.45,duration:0.45))
     }
     func burst(at p: V3, count: Int, big: Bool) {
         for i in 0..<count {
@@ -506,10 +622,34 @@ final class Dogfight {
             sparks.append(Spark(node:n,position:p,velocity:rng.vector(big ? 24 : 10),life:duration,duration:duration,scale:scale))
         }
         if big {
+            let fireball = node(SCNSphere(radius:1),sparkMaterials[0],p)
+            scene.rootNode.addChildNode(fireball)
+            effects.append(Transient(node:fireball,kind:.fireball,life:0.7,duration:0.7))
+            let ring = node(SCNTorus(ringRadius:1,pipeRadius:0.025),sparkMaterials[1],p)
+            ring.simdOrientation = simd_quatf(from:V3(0,1,0),to:unit(cameraPosition-p))
+            scene.rootNode.addChildNode(ring)
+            effects.append(Transient(node:ring,kind:.ring,life:1.2,duration:1.2))
             let light = SCNNode(); light.light = SCNLight(); light.light!.type = .omni
             light.light!.color = orange; light.light!.intensity = 2500; light.light!.attenuationEndDistance = 100
             light.simdPosition = p; scene.rootNode.addChildNode(light)
-            light.runAction(.sequence([.wait(duration:0.15),.fadeOut(duration:0.4),.removeFromParentNode()]))
+            effects.append(Transient(node:light,kind:.light,life:0.5,duration:0.5))
+        }
+    }
+    func updateEffects(_ dt: Float) {
+        for i in effects.indices.reversed() {
+            effects[i].life -= dt
+            let t = max(0,effects[i].life/effects[i].duration), age = 1-t
+            let n = effects[i].node
+            switch effects[i].kind {
+            case .fireball:
+                n.simdScale = V3(repeating:1+age*9); n.opacity = CGFloat(t*t)
+            case .ring:
+                n.simdScale = V3(repeating:1+age*36); n.opacity = CGFloat(t*t*0.6)
+            case .light: n.light?.intensity = CGFloat(2500*t*t)
+            case .arrival:
+                n.simdScale = V3(repeating:0.3+t*3); n.opacity = CGFloat(t)
+            }
+            if effects[i].life<=0 { n.removeFromParentNode(); effects.remove(at:i) }
         }
     }
     func updateSparks(_ dt: Float) {
@@ -523,26 +663,29 @@ final class Dogfight {
         }
     }
     func cameraSubject() -> Fighter? {
-        switch cameraIndex {
-        case 0: return fighters[0]
-        case 1: return fighters[1]
-        case 3: return fighters[4]
-        case 4: return fighters[7]
-        case 5: return fighters[8]
-        default: return nil
-        }
+        cameraIndex == 2 || !fighters[followedIndex].active ? nil : fighters[followedIndex]
+    }
+    func selectCameraSubject() {
+        let preferred = [0,1,0,4,7,8][cameraIndex]
+        let faction = fighters[preferred].faction
+        followedIndex = fighters[preferred].active ? preferred : (fighters.firstIndex { $0.active && $0.faction == faction } ?? fighters.firstIndex(where:\.active) ?? preferred)
     }
     func nextCamera() {
         cameraIndex = (cameraIndex+1)%cameraNames.count
         cameraAge = 0; cut = true
-        if let subject = cameraSubject(), subject.respawn > 0 {
-            subject.respawn = 0; subject.hitPoints = 4; subject.node.isHidden = false
-        }
+        wreckHold = 0; selectCameraSubject()
         cameraChanged?()
     }
     func updateCamera(_ dt: Float) {
+        if wreckHold > 0 {
+            wreckHold -= dt
+            camera.look(at:SCNVector3(wreckPosition))
+            if wreckHold <= 0 { selectCameraSubject(); cut = true }
+            return
+        }
+        if cameraIndex != 2 && !fighters[followedIndex].active { selectCameraSubject(); cut = true }
         var desired: V3, look: V3
-        let f = cameraSubject() ?? fighters[0]
+        let f = cameraSubject() ?? fighters.first(where:\.active) ?? fighters[0]
         let right = unit(simd_cross(f.forward,V3(0,1,0)))
         switch cameraIndex {
         case 0:
@@ -550,7 +693,7 @@ final class Dogfight {
             look = f.position+f.forward*28
         case 1:
             desired = f.position-f.forward*28+V3(0,6,0)-right*7
-            look = fighters[0].position+f.forward*15
+            look = f.position+f.forward*25
         case 2:
             let a = time*0.035
             desired = V3(sin(a)*310,145+sin(a*2)*35,cos(a)*310)
@@ -563,21 +706,35 @@ final class Dogfight {
             look = f.position-f.forward*25
         default:
             desired = f.position-f.forward*65+right*35+V3(0,30,0)
-            look = mix(f.position,fighters[9].position,0.3)
+            look = f.position+f.forward*12
         }
         // Keep camera bodies outside asteroid surfaces too.
-        for rock in rocks {
-            let delta = desired-rock.position, clearance = rock.radius+6
-            if simd_length(delta)<clearance { desired = rock.position+unit(delta)*clearance }
-        }
+        desired = clearCamera(desired)
         let smoothing: Float = cut ? 1 : 1-exp(-dt*4)
         cameraPosition = mix(cameraPosition,desired,smoothing)
+        // Smoothing itself can cross a rock or another fighter, so check the actual camera too.
+        cameraPosition = clearCamera(cameraPosition)
         cameraLook = mix(cameraLook,look,cut ? 1 : 1-exp(-dt*5))
         camera.simdPosition = cameraPosition
         let roll = cameraIndex == 2 ? Float(0) : sin(time*0.3)*0.045
         camera.look(at:SCNVector3(cameraLook),up:SCNVector3(roll,1,0),localFront:SCNVector3(0,0,-1))
         camera.camera!.fieldOfView = cameraIndex == 2 ? 65 : 58
         cut = false
+    }
+    func clearCamera(_ point: V3) -> V3 {
+        var p = point
+        for _ in 0..<3 {
+            for rock in rocks {
+                let delta = p-rock.position, clearance = rock.radius+5
+                if simd_length_squared(delta)<clearance*clearance { p = rock.position+unit(delta)*clearance }
+            }
+            for f in fighters where f.active {
+                let delta = p-f.position
+                let clearance: Float = f === cameraSubject() ? 17 : 10
+                if simd_length_squared(delta)<clearance*clearance { p = f.position+unit(delta)*clearance }
+            }
+        }
+        return p
     }
 }
 
@@ -655,6 +812,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var cameraDetail: NSTextField!
     var status: NSTextField!
     var telemetry: NSTextField!
+    var sector: NSTextField!
+    var eventStatus: NSTextField!
     var hint: NSTextField!
     var autoButton: NSButton!
     var pauseButton: NSButton!
@@ -669,7 +828,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.applicationIconImage = appIcon()
         buildMenu()
-        battle = Dogfight()
+        battle = Dogfight(seed:requestedSeed())
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1440,height:900)
         let width = min(1440,screen.width-80), height = min(900,screen.height-80)
         window = NSWindow(contentRect:NSRect(x:0,y:0,width:width,height:height),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
@@ -726,6 +885,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuView.addItem(withTitle:"Show / Hide Overlay",action:#selector(toggleHUD),keyEquivalent:"u")
         menuView.addItem(withTitle:"Toggle Full Screen",action:#selector(fullscreen),keyEquivalent:"f")
         menuView.addItem(withTitle:"Toggle 30 / 60 FPS",action:#selector(toggleQuality),keyEquivalent:"j")
+        menuView.addItem(withTitle:"Generate New Arena",action:#selector(newArena),keyEquivalent:"r")
         viewItem.submenu = menuView
         for item in menu.items+menuView.items { if item.action != nil && item.action != #selector(NSApplication.hide(_:)) && item.action != #selector(NSApplication.terminate(_:)) { item.target = self } }
         NSApp.mainMenu = bar
@@ -776,13 +936,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let w = overlay.bounds.width, h = overlay.bounds.height
         let brand = label("A S T E R O I D   S Q U A D R O N",size:18,weight:.medium,color:color(0.88,0.94,0.94))
         place(brand,x:36,y:h-83,width:550,height:27,mask:[.minYMargin])
-        place(label("A NEVER-ENDING DOGFIGHT  /  OUTER RIM SECTOR 07",size:10,color:color(0.46,0.64,0.69),mono:true),x:38,y:h-105,width:550,height:17,mask:[.minYMargin])
+        sector = label("",size:10,color:color(0.46,0.64,0.69),mono:true)
+        place(sector,x:38,y:h-105,width:550,height:17,mask:[.minYMargin])
         status = label("",size:11,weight:.medium,color:cyan,mono:true)
         status.alignment = .right
         place(status,x:w-360,y:h-80,width:322,height:20,mask:[.minXMargin,.minYMargin])
-        let sub = label("LOCAL SIMULATION  ·  NO NETWORK REQUIRED",size:9,color:color(0.4,0.56,0.61),mono:true)
-        sub.alignment = .right
-        place(sub,x:w-360,y:h-101,width:322,height:16,mask:[.minXMargin,.minYMargin])
+        eventStatus = label("",size:9,color:color(0.4,0.56,0.61),mono:true)
+        eventStatus.alignment = .right
+        place(eventStatus,x:w-390,y:h-101,width:352,height:16,mask:[.minXMargin,.minYMargin])
         cameraTitle = label("",size:21,weight:.light,color:color(0.9,0.95,0.94))
         place(cameraTitle,x:38,y:48,width:420,height:30)
         cameraDetail = label("",size:9,color:cyan,mono:true)
@@ -817,7 +978,19 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if now-lastHUD > 1 {
             lastHUD = now
             let duration = Int(now-startTime)
-            telemetry.stringValue = String(format:"12 FIGHTERS   /   245 ASTEROIDS   /   %02d:%02d:%02d ELAPSED",duration/3600,(duration/60)%60,duration%60)
+            telemetry.stringValue = String(format:"%02d X-WINGS / %02d TIES   ·   WAVE %02d   ·   %02d:%02d:%02d",battle.rebelCount,battle.empireCount,battle.waveNumber,duration/3600,(duration/60)%60,duration%60)
+            sector.stringValue = String(format:"PROCEDURAL ARENA  /  SECTOR %08llX",battle.seed & 0xFFFFFFFF)
+            if let countdown = battle.waveCountdown {
+                eventStatus.stringValue = String(format:"HYPERSPACE SIGNATURES  ·  ETA %02d SEC",max(0,Int(ceil(countdown))))
+                eventStatus.textColor = cyan
+            } else if battle.arrivingCount > 0 {
+                eventStatus.stringValue = "REINFORCEMENTS DROPPING FROM HYPERSPACE"
+                eventStatus.textColor = cyan
+            } else {
+                eventStatus.stringValue = String(format:"%03d LOSSES   /   %03d REINFORCEMENTS",battle.destroyed,battle.reinforcements)
+                eventStatus.textColor = color(0.4,0.56,0.61)
+            }
+            hint.isHidden = overlay.bounds.width<1120
             let idle = now-lastActivity > 9
             if !hudHidden { overlay.alphaValue = idle ? 0.34 : 1 }
             updateStatus()
@@ -847,6 +1020,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case "h", "u": toggleHUD()
         case "k": toggleAwake()
         case "j": toggleQuality()
+        case "r": newArena()
         case "?", "/": showHelp()
         case "\u{1b}": if window.styleMask.contains(.fullScreen) { fullscreen() }
         default: break
@@ -868,13 +1042,21 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         view.antialiasingMode = highQuality ? .multisampling4X : .multisampling2X
         startTimer(); showControls()
     }
+    @objc func newArena() {
+        let wasPaused = battle.paused, wasAutomatic = battle.automatic
+        battle = Dogfight()
+        battle.paused = wasPaused; battle.automatic = wasAutomatic
+        battle.cameraChanged = { [weak self] in self?.updateCameraHUD() }
+        view.scene = battle.scene; view.pointOfView = battle.camera
+        updateCameraHUD(); showControls()
+    }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:"1.0",.credits:NSAttributedString(string:"An endless, procedural X-wing and TIE fighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm.")])
+        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:"1.1",.credits:NSAttributedString(string:"An endless, procedural X-wing and TIE fighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm.")])
     }
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "C / →   Next camera\nA          Automatic camera cuts\nF          Toggle full screen\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\n⌘Q       Quit and release keep awake\n\nKeep awake uses the macOS caffeinate tool with -d -i. It prevents idle display and system sleep while the app runs, including while flight is paused or the window is minimized. Closing the window quits the app and releases its assertions.\n\nThe default is 30 fps to leave resources for your agents. No audio, network, or downloaded assets.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm."
+        alert.informativeText = "C / →   Next camera\nA          Automatic camera cuts\nF          Toggle full screen\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\n⌘Q       Quit and release keep awake\n\nFighters are lost in combat. When either squadron is depleted, reinforcements arrive in a staggered hyperspace wave. The gas clouds are procedural 3D density volumes.\n\nKeep awake uses caffeinate -d -i, including while paused or minimized. Closing the window quits the app and releases its assertions.\n\nDefault: 30 fps. No audio, network, or downloaded assets.\n\nUnofficial fan project. Star Wars belongs to Lucasfilm."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }
@@ -888,29 +1070,20 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let output = URL(fileURLWithPath:CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png")
         let image = view.snapshot()
         if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data:tiff), let png = bitmap.representation(using:.png,properties:[:]) { try? png.write(to:output) }
-        let stats: [String:Any] = ["fighters":battle.fighters.count,"asteroids":battle.rocks.count,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"snapshot":output.path]
+        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"snapshot":output.path]
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }
 
+func requestedSeed() -> UInt64 {
+    if let i = CommandLine.arguments.firstIndex(of:"--seed"), i+1<CommandLine.arguments.count, let seed = UInt64(CommandLine.arguments[i+1]) { return seed }
+    return UInt64.random(in:1...UInt64.max)
+}
+
 if CommandLine.arguments.contains("--verify-simulation") {
-    let battle = Dogfight()
-    var cameraVisits = Set<Int>()
-    var maxLasers = 0, maxSparks = 0
-    for _ in 0..<18000 {
-        battle.update(dt:1.0/30.0)
-        cameraVisits.insert(battle.cameraIndex)
-        maxLasers = max(maxLasers,battle.lasers.count); maxSparks = max(maxSparks,battle.sparks.count)
-        for f in battle.fighters {
-            precondition(f.position.x.isFinite && f.position.y.isFinite && f.position.z.isFinite,"Non-finite fighter position")
-            precondition(abs(simd_length(f.forward)-1)<0.01,"Invalid heading")
-        }
-        precondition(battle.camera.simdPosition.x.isFinite,"Invalid camera position")
-    }
-    precondition(cameraVisits.count == 6,"Not all cameras were visited")
-    precondition(maxLasers < 250 && maxSparks < 1500,"Unbounded effects")
-    precondition(battle.destroyed > 0,"Combat never produces a kill")
-    print("PASS: 10 simulated minutes, all 6 cameras, \(battle.shots) shots, \(battle.destroyed) regenerating kills; max \(maxLasers) lasers / \(maxSparks) particles.")
+    verifySimulation()
+} else if let index = CommandLine.arguments.firstIndex(of:"--render-review"), index+1<CommandLine.arguments.count {
+    renderReview(directory:URL(fileURLWithPath:CommandLine.arguments[index+1]))
 } else {
     let app = NSApplication.shared
     let delegate = App()
