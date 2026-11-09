@@ -120,6 +120,7 @@ func colonialViper() -> SCNNode {
         root.addChildNode(box(V3(0.6,0.025,1.5),red,V3(sign*2.7,-0.32,1.6)))
         root.addChildNode(cylinder(0.105,4.5,armor,V3(sign*3.45,-0.30,0.1)))
         root.addChildNode(cylinder(0.06,1.25,dark,V3(sign*3.45,-0.30,-2.5)))
+        addMuzzle(to:root,at:V3(sign*3.45,-0.30,-3.22),name:"\(sign)")
         root.addChildNode(box(V3(0.45,0.2,0.55),armor,V3(sign*1.6,-0.5,1.3)))
     }
     root.addChildNode(hullMesh([V3(-0.12,1.0,0.5),V3(-0.12,2.8,1.9),V3(-0.12,2.5,3.2),V3(-0.12,0.9,3.2),V3(0.12,1,0.5),V3(0.12,2.8,1.9),V3(0.12,2.5,3.2),V3(0.12,0.9,3.2)],faces:[[0,1,2,3],[4,7,6,5],[0,4,5,1],[1,5,6,2],[2,6,7,3],[3,7,4,0]],mat:red))
@@ -158,6 +159,7 @@ func cylonRaider() -> SCNNode {
             root.addChildNode(segment(wingSurface(x,0.12,s),wingSurface(x+0.55,0.12,s),radius:0.025,mat:edge))
         }
         root.addChildNode(cylinder(0.13,1.0,dark,V3(s*2.5,-0.2,-1.3)))
+        addMuzzle(to:root,at:V3(s*2.5,-0.2,-1.88),name:"\(s)")
         root.addChildNode(cylinder(0.2,0.1,material(color(0.4,0.6,1),emission:color(0.35,0.7,1.4)),V3(s*1.6,-0.18,1.8)))
     }
     return root

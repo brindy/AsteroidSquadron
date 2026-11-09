@@ -31,9 +31,6 @@ enum Faction: String, CaseIterable, Hashable {
     var usesBlinkFTL: Bool { self == .colonial || self == .cylon }
     var usesCarrier: Bool { self != .rebel }
     var projectileSpeed: Float { usesBlinkFTL ? 430 : 340 }
-    var gunOffset: Float {
-        switch self { case .rebel: return 3.7; case .empire: return 0.5; case .colonial: return 3; case .cylon: return 2.5 }
-    }
     func fighterModel() -> SCNNode {
         switch self { case .rebel: return xWing(); case .empire: return tieFighter(); case .colonial: return colonialViper(); case .cylon: return cylonRaider() }
     }

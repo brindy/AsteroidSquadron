@@ -27,6 +27,7 @@ final class CinematicDirector {
     var carrierCuts = 0
     var dangerCuts = 0
     var normalCuts = 0
+    var hardCuts = 0
     var resumeStyle = 0
     var lastDangerTime: Float = -20
     var caption: String?
@@ -45,7 +46,10 @@ final class CinematicDirector {
         case .carrierDeparture:
             caption = featuredCarrier?.faction.usesBlinkFTL == true ? "FTL JUMP" : "JUMP TO HYPERSPACE"
             detail = "CAPITAL SHIP DEPARTURE"
-        case .spin: caption = "LOSS OF CONTROL"; detail = "ASTEROID STRIKE / RECOVERY TRACKING"; dangerCuts += 1
+        case .spin:
+            caption = "LOSS OF CONTROL"
+            detail = b.fighters[b.followedIndex].spin?.cause == .ship ? "SHIP COLLISION / RECOVERY TRACKING" : "ASTEROID STRIKE / RECOVERY TRACKING"
+            dangerCuts += 1
         case .none: caption = nil; detail = nil; featuredCarrier = nil
         }
         b.cameraChanged?()
@@ -54,7 +58,13 @@ final class CinematicDirector {
         if b.automatic { featuredCarrier = ship; begin(.carrierArrival,in:b) }
     }
     func requestCarrierDeparture(_ ship: Carrier, in b: Dogfight) {
-        if b.automatic { featuredCarrier = ship; begin(.carrierDeparture,in:b) }
+        guard b.automatic else { return }
+        // Keep the arrival camera and its shot clock through the same departure beat.
+        if featuredCarrier === ship && event == .carrierArrival {
+            caption = ship.faction.usesBlinkFTL ? "FTL JUMP" : "JUMP TO HYPERSPACE"
+            detail = "SQUADRON DEPLOYED / CAPITAL SHIP DEPARTURE"
+            b.cameraChanged?()
+        } else { featuredCarrier = ship; begin(.carrierDeparture,in:b) }
     }
     func requestSpin(_ index: Int, in b: Dogfight) {
         guard b.automatic, event == .none, b.time-lastDangerTime>8, b.cameraAge>2 else { return }
@@ -72,7 +82,7 @@ final class CinematicDirector {
         if let f = b.cameraSubject() {
             heading = f.forward
             let right = unit(simd_cross(heading,V3(0,1,0)))
-            flybyAnchor = b.path(f,b.time+1.4)+right*side*22+V3(0,7,0)
+            flybyAnchor = f.position+f.velocity*1.4+right*side*22+V3(0,7,0)
         }
         velocity = .zero; lookVelocity = .zero; normalCuts += 1
     }
@@ -106,11 +116,12 @@ final class CinematicDirector {
             let anchor = ship.station(age)
             let framing = ship.framingScale
             if event == .carrierArrival {
-                let dolly = min(1,max(0,(age-ship.arrivalDuration)/2.7))
+                let linear = min(1,max(0,(age-ship.arrivalDuration)/3))
+                let dolly = linear*linear*(3-2*linear)
                 let low: Float = ship.faction == .colonial ? 25 : -38
-                desired = anchor+(right*(220-dolly*65)+up*(85+dolly*(low-85))+ship.forward*(180-dolly*45))*framing
-                look = anchor+ship.forward*(dolly*(ship.faction == .colonial ? 55 : 22))-up*(dolly*7); fov = 50
-                if age>6.4 { endEvent(in:b,follow:ship.squadron.first); update(0,in:b); return }
+                desired = anchor+(right*(220-dolly*30)+up*(85+dolly*(low-85))+ship.forward*(180-dolly*25))*framing
+                look = anchor+(ship.forward*(dolly*(ship.faction == .colonial ? 55 : 22))-up*(dolly*7))*ship.scale; fov = 50
+                if age>ship.departureAge+ship.departureDuration { endEvent(in:b,follow:ship.squadron.first); update(0,in:b); return }
             } else {
                 desired = anchor+(right*310+up*100+ship.forward*220)*framing
                 look = ship.faction.usesBlinkFTL ? anchor : anchor+ship.forward*min(190,max(0,age-ship.departureAge)*115)
@@ -147,8 +158,8 @@ final class CinematicDirector {
                 desired = f.position-heading*30+right*10+up*6
                 look = action; fov = 51
             case 1:
-                desired = f.spin == nil ? b.path(f,b.time-0.95)+right*10+up*4 : f.position-heading*35+right*15+up*8
-                look = f.spin == nil ? mix(b.path(f,b.time+0.6),action,0.25) : f.position
+                desired = f.spin == nil ? f.historyPosition(at:b.time-0.85)+right*10+up*4 : f.position-heading*35+right*15+up*8
+                look = f.spin == nil ? mix(f.position+f.velocity*0.5,action,0.25) : f.position
                 fov = 56
             case 2:
                 let a = b.time*0.026
@@ -176,6 +187,7 @@ final class CinematicDirector {
         }
         desired = b.clearCamera(desired)
         if b.cut {
+            hardCuts += 1
             b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
         } else {
             damp(&b.cameraPosition,velocity:&velocity,target:desired,frequency:7,dt:dt)

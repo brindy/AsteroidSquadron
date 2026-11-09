@@ -55,22 +55,27 @@ final class Carrier {
     let squadron: [Int]
     var announced = false
     var departing = false
-    var departureAge: Float = 10
+    var departureAge: Float { lastLaunchAge+0.18 }
+    var lastLaunchAge: Float { 2.5+Float(max(0,squadron.count-1))*0.35 }
+    var departureDuration: Float { faction.usesBlinkFTL ? 0.65 : 1.5 }
+    let scale: Float = 6
     var blinkEntered = false
     var blinkExited = false
     var arrivalDuration: Float { faction.usesBlinkFTL ? 0.85 : 1.4 }
     var cameraBounds: V3 {
         switch faction { case .colonial: return V3(84,42,130); case .cylon: return V3(158,62,158); default: return V3(77,68,130) }
     }
-    var framingScale: Float { faction == .cylon ? 1.4 : (faction == .colonial ? 1.12 : 1) }
+    var framingScale: Float { (faction == .cylon ? 1.4 : (faction == .colonial ? 1.12 : 1))*scale }
+    var worldRadius: Float { max(cameraBounds.x,max(cameraBounds.y,cameraBounds.z))*scale }
     init(faction: Faction = .empire, side: Int = 1, origin: V3, forward: V3, start: Float, squadron: [Int]) {
         self.faction = faction; self.side = side; node = faction.capitalModel()
         self.origin = origin; self.forward = forward; self.start = start; self.squadron = squadron
         warp = box(V3(3,3,1),material(color(0.5,0.8,1),emission:color(1,2,3)))
         node.isHidden = true; warp.isHidden = true
+        node.simdScale = V3(repeating:scale)
         node.look(at:SCNVector3(forward),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
     }
-    func station(_ age: Float) -> V3 { faction.usesBlinkFTL ? origin : origin+forward*max(0,min(8.6,age-1.4))*3 }
+    func station(_ age: Float) -> V3 { faction.usesBlinkFTL ? origin : origin+forward*max(0,min(departureAge-1.4,age-1.4))*3 }
     func launchPosition(slot: Int, at age: Float) -> V3 {
         let sign: Float = slot%2 == 0 ? -1 : 1
         let port: V3
@@ -79,6 +84,6 @@ final class Carrier {
         case .cylon: port = V3(sign*20,-34,-30)
         default: port = V3(sign*11,-16,15)
         }
-        return station(age)+node.simdOrientation.act(port)
+        return station(age)+node.simdOrientation.act(port*scale)
     }
 }

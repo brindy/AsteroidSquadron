@@ -7,6 +7,10 @@ typealias V3 = SIMD3<Float>
 let tau = Float.pi * 2
 func mix(_ a: V3, _ b: V3, _ t: Float) -> V3 { a + (b - a) * t }
 func unit(_ v: V3) -> V3 { simd_length_squared(v) > 0.0001 ? simd_normalize(v) : V3(0, 0, -1) }
+func addMuzzle(to parent: SCNNode, at position: V3, name: String) {
+    let muzzle = SCNNode(); muzzle.name = "muzzle.\(name)"; muzzle.simdPosition = position
+    parent.addChildNode(muzzle)
+}
 func color(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> NSColor {
     NSColor(calibratedRed: r, green: g, blue: b, alpha: a)
 }
@@ -112,6 +116,7 @@ func xWing() -> SCNNode {
             foil.addChildNode(box(V3(0.18, 0.19, 1.72), hull, V3(sx * 3.5, 0, 0)))
             foil.addChildNode(cylinder(0.13, 4.6, dark, V3(sx * 4.2, 0, -0.9)))
             foil.addChildNode(cylinder(0.08, 1.5, pale, V3(sx * 4.2, 0, -3.3)))
+            addMuzzle(to:foil,at:V3(sx*4.2,0,-4.12),name:"\(sx).\(sy)")
             foil.addChildNode(cylinder(0.43, 2.7, hull, V3(sx * 1.15, 0, 0.6)))
             foil.addChildNode(cylinder(0.34,0.05,dark,V3(sx * 1.15,0,-0.77)))
             foil.addChildNode(cylinder(0.12,0.07,hull,V3(sx * 1.15,0,-0.81)))
@@ -142,6 +147,10 @@ func tieFighter() -> SCNNode {
         root.addChildNode(segment(V3(0, 0, -1.13), V3(sin(a) * 0.65, cos(a) * 0.65, -1.13), radius: 0.025, mat: frame))
     }
     root.addChildNode(cylinder(0.22, 0.2, frame, V3(0, 0, -1.15)))
+    for s: Float in [-1,1] {
+        root.addChildNode(cylinder(0.12,0.5,frame,V3(s*0.43,-0.55,-1.1)))
+        addMuzzle(to:root,at:V3(s*0.43,-0.55,-1.42),name:"\(s)")
+    }
     for s: Float in [-1, 1] {
         root.addChildNode(box(V3(2.5, 0.4, 0.45), frame, V3(s * 1.75, 0, 0)))
         let p: [V3] = [V3(0,-3.7,-1.8), V3(0,-2.6,2.3), V3(0,2.6,2.3), V3(0,3.7,-1.8), V3(0,2.5,-3), V3(0,-2.5,-3)]
@@ -180,6 +189,18 @@ final class Fighter {
     var generation = 0
     var orbitRate: Float = 0.185
     var scanner: SCNNode?
+    var muzzles: [SCNNode] = []
+    var gunCycle = 0
+    var velocity = V3.zero
+    var navigationUp = V3(0,1,0)
+    var bank: Float = 0
+    var motionInitialized = false
+    var breakUntil: Float = -1
+    var breakDirection = V3.zero
+    var history: [(Float,V3)] = []
+    var entrySpeed: Float { entry == .hyperspace ? 28 : 160 }
+    var cruiseSpeed: Float { faction == .rebel ? 48 : (faction == .empire ? 52 : 56) }
+    let accelerationLimit: Float = 60
     let pair: Int
     let trailing: Bool
     var position = V3.zero
@@ -206,6 +227,7 @@ final class Fighter {
         self.faction = faction; self.side = side; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
         node.addChildNode(faction.fighterModel())
         scanner = node.childNode(withName:"scanner",recursively:true)
+        cacheMuzzles()
         let glow = material(color(0.55,0.85,1),emission:color(1.4,2.2,3))
         warp.addChildNode(box(V3(0.3,0.3,1),glow))
         warp.addChildNode(box(V3(0.85,0.85,1),material(color(0.15,0.4,1,0.25),emission:color(0.15,0.4,1,0.25))))
@@ -216,10 +238,24 @@ final class Fighter {
         faction = replacement; generation += 1
         node.addChildNode(replacement.fighterModel())
         scanner = node.childNode(withName:"scanner",recursively:true)
+        cacheMuzzles()
         state = .destroyed; node.isHidden = true; node.opacity = 1
         node.simdScale = V3(repeating:1); warp.isHidden = true
         entry = .none; entryTime = -1000; spin = nil; attackTarget = nil
         arrival = 0; hitPoints = 6; collisionCooldown = 25
+        motionInitialized = false; velocity = .zero; navigationUp = V3(0,1,0); bank = 0
+        history.removeAll(keepingCapacity:true); breakUntil = -1
+    }
+    func cacheMuzzles() {
+        muzzles.removeAll(keepingCapacity:true)
+        node.enumerateChildNodes { child,_ in
+            if child.name?.hasPrefix("muzzle.") == true { self.muzzles.append(child) }
+        }
+        muzzles.sort { ($0.name ?? "")<($1.name ?? "") }; gunCycle = 0
+    }
+    var firingMuzzles: [SCNNode] {
+        if muzzles.count == 4 { return gunCycle%2 == 0 ? [muzzles[0],muzzles[3]] : [muzzles[1],muzzles[2]] }
+        return muzzles
     }
 }
 struct Laser {
@@ -227,10 +263,12 @@ struct Laser {
     var position: V3
     let velocity: V3
     var life: Float
-    let target: Int
-    let hits: Bool
-    let faction: Faction
-    let targetGeneration: Int
+    let sourceSide: Int
+    let generations: [Int]
+    let launchOrigin: V3
+    let launchForward: V3
+    let inheritedVelocity: V3
+    let length: Float
 }
 struct Spark {
     enum Kind { case debris, ember, impact }
@@ -332,6 +370,9 @@ final class Dogfight {
     var carrierDepartures = 0
     var formationArrivals = 0
     var spinOuts = 0
+    var shipCollisions = 0
+    var shipCollisionLosses = 0
+    var shipContacts = Set<ShipContact>()
     var recoveries = 0
     var asteroidLosses = 0
     let seed: UInt64
@@ -347,6 +388,10 @@ final class Dogfight {
     var wreckHold: Float = 0
     var wreckPosition = V3.zero
     var time: Float = 0
+    var physicsAccumulator: Double = 0
+    var physicsSteps = 0
+    var planetPosition = V3.zero
+    var planetRadius: Float = 440
     var cameraAge: Float = 0
     var cameraIndex = 0
     var automatic = true
@@ -377,7 +422,7 @@ final class Dogfight {
         orbitRadius = rng.range(100,130)
         scene.background.contents = color(0.003,0.007,0.016)
         scene.fogColor = color(0.009,0.017,0.03)
-        scene.fogStartDistance = 1000; scene.fogEndDistance = 3300
+        scene.fogStartDistance = 1800; scene.fogEndDistance = 7000
         scene.lightingEnvironment.contents = color(0.18,0.22,0.28)
         scene.lightingEnvironment.intensity = 0.65
         camera.camera = SCNCamera()
@@ -510,6 +555,7 @@ final class Dogfight {
         m.roughness.contents = 0.9
         let a = rng.range(0,tau)
         let n = node(g,m,V3(sin(a)*2400,rng.range(100,650),cos(a)*2400))
+        planetPosition = n.simdPosition; planetRadius = Float(g.radius)
         scene.rootNode.addChildNode(n)
         let atmosphere = SCNSphere(radius:g.radius*1.023); atmosphere.segmentCount = 72
         let am = SCNMaterial(); am.diffuse.contents = color(0.08,0.35,0.5,0.06)
@@ -547,90 +593,59 @@ final class Dogfight {
 
     func update(dt: Float) {
         guard !paused else { return }
+        if dt<=0 { simulateStep(0); return }
+        physicsAccumulator += Double(min(0.12,dt))
+        let step = 1.0/60.0
+        while physicsAccumulator+0.00000001>=step {
+            simulateStep(Float(step))
+            physicsAccumulator = max(0,physicsAccumulator-step)
+            physicsSteps += 1
+        }
+    }
+    private func simulateStep(_ dt: Float) {
         time += dt; cameraAge += dt
-        for rock in rocks { rock.node.simdEulerAngles += rock.spin * dt }
+        for rock in rocks { rock.node.simdEulerAngles += rock.spin*dt }
+        for f in fighters where f.active && !f.motionInitialized {
+            let point = orbitPath(f,time)
+            activateFlight(f,position:point,forward:unit(orbitPath(f,time+0.07)-point),speed:f.cruiseSpeed)
+        }
+        let positions = fighters.map(\.position), velocities = fighters.map(\.velocity), active = fighters.map(\.active)
         for f in fighters {
             guard f.state != .destroyed else { continue }
-            f.collisionCooldown = max(0,f.collisionCooldown-dt)
-            if f.spin != nil { updateSpinOut(f,dt:dt); continue }
-            let destination = path(f,time)
-            f.forward = unit(path(f,time+0.07)-destination)
-            f.position = destination
-            if f.state == .arriving {
+            f.cooldown -= dt; f.collisionCooldown = max(0,f.collisionCooldown-dt)
+            if f.spin != nil { updateSpinOut(f,dt:dt,positions:positions,velocities:velocities,active:active) }
+            else if f.state == .arriving {
                 if !updateArrival(f) { continue }
-            }
-            f.node.simdPosition = f.position
-            f.scanner?.simdPosition.x = sin(time*3+Float(f.pair))*0.49
-            let up = V3(sin(time*0.8+Float(f.pair))*0.22,1,cos(time*0.7+Float(f.pair))*0.12)
-            f.node.look(at:SCNVector3(f.position+f.forward*20), up:SCNVector3(up), localFront:SCNVector3(0,0,-1))
-            f.cooldown -= dt
-            if f.active { tryAsteroidStrike(f,dt:dt) }
-        }
-        for i in 0..<fighters.count {
-            let f = fighters[i]
-            guard f.cooldown <= 0, f.active, f.spin == nil, time >= f.entryTime+f.formationHold else { continue }
-            let enemies = fighters.indices.filter { fighters[$0].active && fighters[$0].faction != f.faction }
-            let inFront = enemies.filter { simd_dot(unit(fighters[$0].position-f.position),f.forward)>0.05 }
-            let target = f.attackTarget.flatMap { inFront.contains($0) ? $0 : nil } ?? inFront.min { simd_distance_squared(fighters[$0].position,f.position)<simd_distance_squared(fighters[$1].position,f.position) }
-            if let target { fire(from:i,to:target) }
-            f.cooldown = rng.range(0.35,0.95)
-        }
-        updateLasers(dt)
-        updateSparks(dt)
-        updateEffects(dt)
-        updateReinforcements(dt)
-        updateCarrier()
-        updateCamera(dt)
-        updateBlasts(dt)
-        for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
-    }
-    func fire(from: Int, to: Int, aimed: Bool = true) {
-        let f = fighters[from], target = fighters[to]
-        let speed = f.faction.projectileSpeed
-        let flightTime = simd_distance(f.position,target.position)/speed
-        let predicted = path(target,time+flightTime)
-        let hit = aimed && rng.next() < 0.20
-        let right = unit(simd_cross(f.forward,V3(0,1,0)))
-        for s: Float in [-1,1] {
-            let p = f.position+f.forward*4+right*s*f.faction.gunOffset
-            let n = box(V3(0.1,0.1,f.faction.usesBlinkFTL ? 1.3 : 4.2),projectileMaterials[f.faction]!,p)
-            let spread = hit ? V3.zero : rng.vector(0.1)
-            let direction = unit((aimed ? unit(predicted-p) : f.forward)+spread)
-            n.simdOrientation = simd_quatf(from:V3(0,0,-1),to:direction)
-            scene.rootNode.addChildNode(n)
-            lasers.append(Laser(node:n,position:p,velocity:direction*speed,life:1.5,target:to,hits:hit,faction:f.faction,targetGeneration:target.generation))
-        }
-        shots += 2
-    }
-    func updateLasers(_ dt: Float) {
-        for i in lasers.indices.reversed() {
-            lasers[i].life -= dt
-            let old = lasers[i].position
-            lasers[i].position += lasers[i].velocity*dt
-            let p = lasers[i].position
-            lasers[i].node.simdPosition = p
-            let target = fighters[lasers[i].target]
-            let travel = p-old
-            let factor = max(0,min(1,simd_dot(target.position-old,travel)/max(0.001,simd_length_squared(travel))))
-            let distance = simd_distance(old+travel*factor,target.position)
-            var remove = lasers[i].life <= 0
-            if target.active && target.generation == lasers[i].targetGeneration && target.faction != lasers[i].faction && lasers[i].hits && distance < 4.5 {
-                target.hitPoints -= 1
-                burst(at:target.position,count:9,big:false)
-                remove = true
-                if target.hitPoints <= 0 {
-                    destroy(target)
+                if !f.active {
+                    f.node.simdPosition = f.position
+                    f.node.look(at:SCNVector3(f.position+f.forward),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
                 }
-            }
-            if remove { lasers[i].node.removeFromParentNode(); lasers.remove(at:i) }
+            } else { updateFlight(f,dt:dt,positions:positions,velocities:velocities,active:active) }
+            f.scanner?.simdPosition.x = sin(time*3+Float(f.pair))*0.49
         }
+        resolveShipCollisions(from:positions,wasActive:active,dt:dt)
+        for f in fighters {
+            if f.active && dt>0 {
+                f.history.append((time,f.position))
+                if f.history.count>120 { f.history.removeFirst(f.history.count-120) }
+            }
+        }
+        for i in fighters.indices {
+            let f = fighters[i]
+            guard dt>0, f.cooldown<=0, f.active, f.spin == nil, time>=f.entryTime+f.formationHold else { continue }
+            if let target = chooseTarget(for:f), fire(from:i,to:target) { f.cooldown = rng.range(0.2,0.55) }
+            else { f.cooldown = 0.06 }
+        }
+        updateLasers(dt); updateSparks(dt); updateEffects(dt)
+        updateReinforcements(dt); updateCarrier(); updateCamera(dt); updateBlasts(dt)
+        for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
     }
     func destroy(_ fighter: Fighter) {
         guard fighter.active else { return }
         if fighter === cameraSubject(), cameraIndex != 2 {
             wreckHold = 1.15; wreckPosition = fighter.position
         }
-        let velocity = fighter.spin?.velocity ?? (path(fighter,time+0.08)-path(fighter,time))/0.08
+        let velocity = fighter.velocity
         burst(at:fighter.position,count:42,big:true,velocity:velocity)
         fighter.state = .destroyed; fighter.node.isHidden = true; fighter.warp.isHidden = true
         fighter.spin = nil
@@ -1081,7 +1096,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard CommandLine.arguments.contains("--smoke-test"), let battle, let window else { return }
         let path = CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png"
         let output = URL(fileURLWithPath:path)
-        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
+        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }

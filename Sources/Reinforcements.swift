@@ -2,30 +2,13 @@ import SceneKit
 import simd
 
 extension Dogfight {
+    // Navigation references are not assigned directly to a flying ship's position.
     func path(_ f: Fighter, _ t: Float) -> V3 {
         let age = t-f.entryTime
-        guard f.entry != .none, age<18 else { return orbitPath(f,t) }
-        guard age>0 else { return f.entryPosition }
-        let speed: Float = f.entry == .hyperspace ? 28 : 100
-        let hold = f.formationHold
-        if age<hold { return clearFlight(f.entryPosition+f.entryForward*speed*age) }
-        let split = age-hold
-        let duration: Float = f.entry == .hyperspace ? 6.5 : 8
-        let start = f.entryPosition+f.entryForward*speed*hold
-        let ownOrbit = orbitPath(f,t)
-        var attack = ownOrbit
-        if let target = f.attackTarget {
-            let enemy = fighters[target]
-            let targetPosition = orbitPath(enemy,t)
-            let targetForward = unit(orbitPath(enemy,t+0.1)-targetPosition)
-            attack = targetPosition-targetForward*25
+        if f.entry != .none && age<f.formationHold {
+            return f.entryPosition+f.entryForward*f.entrySpeed*max(0,age)
         }
-        let approach = unit(attack-start)
-        let a = min(1,split/duration), b = 1-a
-        let curved = start*(b*b*b)+(start+f.entryForward*110)*(3*b*b*a)+(attack-approach*75)*(3*b*a*a)+attack*(a*a*a)
-        let rejoin = max(0,min(1,(split-duration)/4))
-        let smooth = rejoin*rejoin*(3-2*rejoin)
-        return clearFlight(mix(curved,ownOrbit,smooth))
+        return orbitPath(f,t)
     }
 
     func assignTargets(_ squadron: [Int]) {
@@ -81,7 +64,7 @@ extension Dogfight {
         guard squadron.allSatisfy({fighters[$0].state == .destroyed}) else { return }
         let faction = sideFactions[side]
         let start = max(time,nextArrivalTime)
-        nextArrivalTime = start+7.2
+        nextArrivalTime = start+6.5
         waveNumber += 1
         if faction == .rebel {
             // The complete V formation gets one collision-free entry corridor.
@@ -114,8 +97,9 @@ extension Dogfight {
             var position = V3.zero
             for _ in 0..<80 {
                 let a = rng.range(0,tau)
-                position = V3(sin(a)*1320,460,cos(a)*1320)
-                if carriers.allSatisfy({simd_distance($0.origin,position)>650}) { break }
+                position = V3(sin(a)*3300,900,cos(a)*3300)
+                let radius: Float = (faction == .cylon ? 158 : 130)*6
+                if carriers.allSatisfy({simd_distance($0.origin,position)>2100}) && simd_distance(position,planetPosition)>radius+planetRadius+250 { break }
             }
             let direction = unit(-position)
             let ship = Carrier(faction:faction,side:side,origin:position,forward:direction,start:start,squadron:squadron)
@@ -137,7 +121,7 @@ extension Dogfight {
     func updateArrival(_ f: Fighter) -> Bool {
         if f.entry == .hangar {
             guard time>=f.entryTime else { return false }
-            f.position = path(f,time); f.forward = unit(path(f,time+0.08)-f.position)
+            activateFlight(f,position:f.entryPosition+f.entryForward*f.entrySpeed*max(0,time-f.entryTime),forward:f.entryForward,speed:f.entrySpeed)
             f.state = .active; f.arrival = 1; f.node.isHidden = false; f.node.opacity = 1
             f.warp.isHidden = true; reinforcements += 1
             return true
@@ -154,6 +138,7 @@ extension Dogfight {
         f.warp.simdScale = V3(1,1,length); f.warp.opacity = CGFloat(remaining)
         if progress>=1 {
             f.state = .active; f.node.opacity = 1; f.warp.isHidden = true
+            activateFlight(f,position:f.entryPosition+f.entryForward*f.entrySpeed*max(0,time-f.entryTime),forward:f.entryForward,speed:f.entrySpeed)
             arrivalFlash(at:f.entryPosition); reinforcements += 1
         }
         return true
@@ -167,10 +152,6 @@ extension Dogfight {
                 ship.announced = true; carrierVisits += 1
                 director.requestCarrierArrival(ship,in:self)
             }
-            // Finish the other capital ship's launch shot before cutting to this departure.
-            if age>=ship.departureAge && !ship.departing && director.event == .carrierArrival && director.featuredCarrier !== ship {
-                ship.departureAge = age+0.2
-            }
             var position = ship.station(age)
             var beam: Float = 0
             if ship.faction.usesBlinkFTL {
@@ -180,14 +161,14 @@ extension Dogfight {
                 } else if age<ship.departureAge {
                     if !ship.blinkEntered {
                         ship.blinkEntered = true; blinkArrivals += 1
-                        jumpPulse(at:ship.origin,radius:ship.cameraBounds.z*1.25)
+                        jumpPulse(at:ship.origin,radius:ship.worldRadius*1.25)
                     }
                     ship.node.isHidden = false
                 } else {
                     if !ship.blinkExited {
                         ship.blinkExited = true; ship.departing = true
                         blinkDepartures += 1; carrierDepartures += 1
-                        jumpPulse(at:ship.origin,radius:ship.cameraBounds.z*1.25)
+                        jumpPulse(at:ship.origin,radius:ship.worldRadius*1.25)
                         director.requestCarrierDeparture(ship,in:self)
                     }
                     ship.node.isHidden = true
@@ -209,10 +190,10 @@ extension Dogfight {
                 ship.warp.isHidden = beam<1
                 ship.warp.simdPosition = position-ship.forward*beam*0.5
                 ship.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:ship.forward)
-                ship.warp.simdScale = V3(1,1,max(1,beam))
+                ship.warp.simdScale = V3(ship.scale,ship.scale,max(1,beam))
             }
             ship.node.simdPosition = position
-            let linger: Float = ship.faction.usesBlinkFTL ? 0.65 : 1.8
+            let linger = ship.departureDuration
             if age>ship.departureAge+linger {
                 ship.node.removeFromParentNode(); ship.warp.removeFromParentNode(); carriers.remove(at:i)
             }
