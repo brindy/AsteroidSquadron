@@ -34,25 +34,36 @@ extension Dogfight {
     func activateFlight(_ f: Fighter, position: V3, forward: V3, speed: Float) {
         f.position = position; f.forward = unit(forward); f.velocity = f.forward*speed
         f.navigationUp = V3(0,1,0); f.bank = 0; f.motionInitialized = true
+        f.pursuitTarget = nil; f.pursuitGeneration = -1; f.pursuitDeadline = 0
+        f.pursuitBreakCount = 0
+        f.breakUntil = -1; f.breakSpeed = 0; f.burstShotsLeft = 0
         f.history.removeAll(keepingCapacity:true); f.history.append((time,position))
         f.applyFlightPose()
     }
     func chooseTarget(for f: Fighter) -> Int? {
         let current = f.attackTarget.flatMap { fighters[$0].active && fighters[$0].side != f.side ? $0 : nil }
-        if let current, time<f.targetReviewAt || f.burstShotsLeft>0 { return current }
+        if let current { return current }
         let choices = fighters.indices.filter { fighters[$0].active && fighters[$0].side != f.side }
-        func score(_ index: Int) -> Float {
-            let enemy = fighters[index]
-            let lead = interceptPoint(from:f.position,velocity:f.velocity,target:enemy.position,targetVelocity:enemy.velocity,speed:f.faction.projectileSpeed)
-            let alignment = simd_dot(unit(lead-f.position),f.forward)
-            let distance = simd_distance(f.position,enemy.position)
-            let tail = max(0,-simd_dot(unit(f.position-enemy.position),enemy.forward))
-            return (alignment+1)*1.2+1.5/(1+distance/200)+tail*0.6+(index == current ? 0.4 : 0)
-        }
-        let target = choices.max { score($0)<score($1) }
+        let target = choices.min { simd_distance_squared(f.position,fighters[$0].position)<simd_distance_squared(f.position,fighters[$1].position) }
         f.attackTarget = target
-        f.targetReviewAt = time+0.85
         return target
+    }
+
+    func breakPursuit(_ f: Fighter, target: Int, positions: [V3]) {
+        let alternatives = fighters.indices.filter { $0 != target && fighters[$0].active && fighters[$0].side != f.side }
+        let next = alternatives.min { simd_distance_squared(f.position,positions[$0])<simd_distance_squared(f.position,positions[$1]) } ?? target
+        // Commit to a world-space extension, rather than turning continuously
+        // toward the next tail. Different deadlines and planes break pursuit rings.
+        let right = unit(simd_cross(f.forward,f.navigationUp))
+        let side: Float = rng.next()<0.5 ? -1 : 1
+        f.breakDirection = unit(f.forward*rng.range(0.3,0.75)+right*side*rng.range(0.8,1.35)+f.navigationUp*rng.range(-0.95,0.95))
+        f.breakSpeed = f.cruiseSpeed*rng.range(1.15,1.5)
+        f.breakUntil = time+rng.range(1.8,2.9)
+        f.attackTarget = next; f.burstShotsLeft = 0
+        f.pursuitTarget = next; f.pursuitGeneration = fighters[next].generation
+        f.pursuitDeadline = f.breakUntil+rng.range(5,10)
+        pursuitBreaks += 1
+        f.pursuitBreakCount += 1
     }
     func updateFlight(_ f: Fighter, dt: Float, positions: [V3], velocities: [V3], active: [Bool]) {
         guard dt>0 else { f.applyFlightPose(); return }
@@ -68,17 +79,28 @@ extension Dogfight {
         let boost = max(0,min(1,(radial-650)/800))
         var speed = f.cruiseSpeed+(215-f.cruiseSpeed)*boost*boost*(3-2*boost)
         var goal = orbitPath(f,time+2.5)
-        if let index = chooseTarget(for:f), simd_length(positions[index])<1100, radial<1300 {
+        if var index = chooseTarget(for:f), simd_length(positions[index])<1100, radial<1300 {
+            if f.spin == nil {
+                if f.pursuitTarget != index || f.pursuitGeneration != fighters[index].generation || f.pursuitDeadline<=0 {
+                    f.pursuitTarget = index; f.pursuitGeneration = fighters[index].generation
+                    f.pursuitDeadline = max(time,f.breakUntil)+rng.range(5,10)
+                }
+                if time>=f.pursuitDeadline {
+                    breakPursuit(f,target:index,positions:positions)
+                    index = f.attackTarget!
+                }
+            } else { f.pursuitDeadline = 0 }
             let p = positions[index], v = velocities[index]
             let muzzle = f.firingMuzzles.first?.simdWorldTransform.columns.3.xyz ?? f.position
             goal = interceptPoint(from:muzzle,velocity:f.velocity,target:p,targetVelocity:v,speed:f.faction.projectileSpeed)
             if simd_distance(p,f.position)<24 && time>f.breakUntil+1 {
                 let right = unit(simd_cross(f.forward,f.navigationUp))
                 f.breakDirection = unit(f.forward*0.25+right*(f.pair%2 == 0 ? 0.9 : -0.9)+f.navigationUp*0.25)
-                f.breakUntil = time+1.8
+                f.breakUntil = time+1.8; f.breakSpeed = f.cruiseSpeed*1.1
             }
-        }
+        } else { f.pursuitDeadline = 0 }
         var desired = time<f.breakUntil ? f.breakDirection : unit(goal-f.position)
+        if time<f.breakUntil { speed = max(speed,f.breakSpeed) }
         let lookAhead = max(80,simd_length(f.velocity)*3)
         var avoidance = V3.zero
         for rock in rocks {

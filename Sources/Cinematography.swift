@@ -9,7 +9,7 @@ struct ArrivalFlight {
 }
 
 final class CinematicDirector {
-    enum Event { case none, formation, carrierArrival, carrierDeparture, spin }
+    enum Event { case none, formation, carrierArrival, carrierDeparture, spin, attack, explosion }
     var event: Event = .none
     var eventAge: Float = 0
     var arrivalFlight: ArrivalFlight?
@@ -23,6 +23,15 @@ final class CinematicDirector {
     var flybyAnchor = V3.zero
     var overviewSubject: Int?
     var overviewDirection = V3.zero
+    var overviewReviewAt: Float = 0
+    var nextHighlightTime: Float = 10
+    var nextCriticalCheck: Float = 0
+    var engagementTarget: Int?
+    var explosionOrigin = V3.zero
+    var explosionVelocity = V3.zero
+    var explosionCamera = V3.zero
+    var attackCuts = 0
+    var explosionCuts = 0
     var shake: Float = 0
     var rng: Random
     var formationCuts = 0
@@ -32,14 +41,12 @@ final class CinematicDirector {
     var dangerCuts = 0
     var normalCuts = 0
     var hardCuts = 0
-    var resumeStyle = 0
     var lastDangerTime: Float = -20
     var caption: String?
     var detail: String?
     init(seed: UInt64) { rng = Random(state:seed ^ 0xC1AE_AA77) }
 
     func begin(_ newEvent: Event, in b: Dogfight) {
-        if event == .none && newEvent != .none { resumeStyle = (b.cameraIndex+1)%6 }
         event = newEvent; eventAge = 0; b.cut = true; b.wreckHold = 0
         switch newEvent {
         case .formation: caption = "SQUADRON INBOUND"; detail = "X-WING FORMATION / HYPERSPACE INSERTION"; formationCuts += 1
@@ -55,6 +62,10 @@ final class CinematicDirector {
             caption = "LOSS OF CONTROL"
             detail = b.fighters[b.followedIndex].spin?.cause == .ship ? "SHIP COLLISION / RECOVERY TRACKING" : "ASTEROID STRIKE / RECOVERY TRACKING"
             dangerCuts += 1
+        case .attack:
+            caption = "HOT PURSUIT"; detail = "CRITICAL ATTACK RUN / TARGET UNDER FIRE"; attackCuts += 1
+        case .explosion:
+            caption = "FIGHTER DESTROYED"; detail = "COMBAT LOSS / EXPLOSION TRACKING"; explosionCuts += 1
         case .none: caption = nil; detail = nil; featuredCarrier = nil
         }
         b.cameraChanged?()
@@ -72,19 +83,55 @@ final class CinematicDirector {
         } else { featuredCarrier = ship; begin(.carrierDeparture,in:b) }
     }
     func requestSpin(_ index: Int, in b: Dogfight) {
-        guard b.automatic, event == .none, b.time-lastDangerTime>8, b.cameraAge>2 else { return }
-        lastDangerTime = b.time; b.followedIndex = index; begin(.spin,in:b)
+        guard b.automatic, event == .none, b.cameraIndex == 2, b.time>=nextHighlightTime, b.time-lastDangerTime>8, b.cameraAge>8 else { return }
+        lastDangerTime = b.time; b.followedIndex = index; heading = b.fighters[index].forward; begin(.spin,in:b)
+    }
+    func requestExplosion(_ fighter: Fighter, in b: Dogfight) {
+        guard b.automatic else { return }
+        let alreadyFollowing = (event == .attack && (engagementTarget.flatMap { b.fighters[$0] } === fighter || b.fighters[b.followedIndex] === fighter)) || (event == .spin && b.fighters[b.followedIndex] === fighter)
+        let important = fighter.hitPoints<=2 || b.sideCount(fighter.side)<=2 || fighter.spin != nil
+        guard alreadyFollowing || (event == .none && b.cameraIndex == 2 && b.time>=nextHighlightTime && b.cameraAge>8 && important) else { return }
+        explosionOrigin = fighter.position; explosionVelocity = fighter.velocity
+        explosionCamera = alreadyFollowing ? b.cameraPosition : fighter.position+unit(b.cameraPosition-fighter.position)*43+V3(0,8,0)
+        let pendingCut = b.cut
+        begin(.explosion,in:b)
+        if alreadyFollowing { b.cut = pendingCut }
+    }
+    func considerCriticalMoment(in b: Dogfight) {
+        guard b.automatic, event == .none, b.cameraIndex == 2, b.cameraAge>8, b.time>=nextHighlightTime, b.time>=nextCriticalCheck else { return }
+        nextCriticalCheck = b.time+0.2
+        for i in b.fighters.indices where b.fighters[i].active && b.fighters[i].spin == nil {
+            let f = b.fighters[i]
+            guard f.burstShotsLeft>0, let target = f.attackTarget, b.fighters[target].active else { continue }
+            let enemy = b.fighters[target], distance = simd_distance(f.position,enemy.position)
+            let important = enemy.hitPoints<=3 || b.sideCount(enemy.side)<=2
+            if important && distance<145 && simd_dot(unit(enemy.position-f.position),f.forward)>0.95 {
+                b.followedIndex = i; engagementTarget = target; heading = f.forward
+                begin(.attack,in:b); return
+            }
+        }
+        for i in b.fighters.indices where b.fighters[i].active && b.fighters[i].spin == nil {
+            let f = b.fighters[i]
+            guard simd_length(f.velocity)>65 else { continue }
+            let threatened = b.rocks.contains { sphereImpact(from:f.position,to:f.position+f.velocity*0.7,center:$0.position,radius:$0.radius+f.faction.collisionRadius+2) != nil }
+            if threatened {
+                requestSpin(i,in:b)
+                if event == .spin { caption = "EVASIVE ACTION"; detail = "ASTEROID CLOSE PASS"; b.cameraChanged?() }
+                return
+            }
+        }
     }
     func endEvent(in b: Dogfight, follow index: Int? = nil) {
         begin(.none,in:b)
-        b.cameraIndex = resumeStyle; b.cameraAge = 0
-        resumeStyle = (resumeStyle+1)%6
+        b.cameraIndex = 2; b.cameraAge = 0
+        nextHighlightTime = b.time+10
         if let index, b.fighters[index].active { b.followedIndex = index } else { b.selectCameraSubject() }
         prepareShot(in:b); b.cameraChanged?()
     }
     func prepareShot(in b: Dogfight) {
         overviewSubject = nil
         overviewDirection = .zero
+        overviewReviewAt = 0
         shotLength = b.cameraIndex == 4 ? 4.8 : (b.cameraIndex == 2 ? 5.5 : rng.range(6.5,9.5))
         if let f = b.cameraSubject() {
             heading = f.forward
@@ -98,26 +145,36 @@ final class CinematicDirector {
         guard !live.isEmpty else {
             return (b.arenaRotation.act(V3(250,160,250)),.zero,49)
         }
-        if overviewSubject == nil || !b.fighters[overviewSubject!].active {
+        if overviewSubject == nil || !b.fighters[overviewSubject!].active || b.time>=overviewReviewAt {
             let old = overviewSubject
+            overviewReviewAt = b.time+2
             // Prefer a busy engagement. Widely separated inbound squadrons are
             // separate subjects, rather than endpoints of a mostly empty panorama.
-            overviewSubject = live.max { a,c in
-                func score(_ index: Int) -> Float {
+            func score(_ index: Int) -> Float {
                     let f = b.fighters[index]
                     return live.reduce(Float(0)) { total,j in
                         let other = b.fighters[j], distance = simd_distance(f.position,other.position)
-                        let weight = max(0,1-distance/220)
+                        let weight = max(0,1-distance/420)
                         return total+weight*(f.side == other.side ? 1 : 3)
                     }
-                }
-                return score(a)<score(c)
             }
-            overviewDirection = .zero
-            if old != nil { b.cut = true }
+            let best = live.max { score($0)<score($1) }!
+            if old == nil || !b.fighters[old!].active || score(best)>score(old!)*1.4+0.5 { overviewSubject = best }
+            if let old, overviewSubject != old, simd_distance(b.fighters[old].position,b.fighters[overviewSubject!].position)>350 {
+                overviewDirection = .zero; b.cut = true
+            }
         }
         let anchor = b.fighters[overviewSubject!]
-        let group = live.map { b.fighters[$0] }.filter { simd_distance($0.position,anchor.position)<150 }
+        // Frame the connected furball, including wingmen on its edges. A distant
+        // inbound squadron is not allowed to stretch the view across empty space.
+        var members = Set([overviewSubject!]), changed = true
+        while changed {
+            changed = false
+            for i in live where !members.contains(i) && simd_distance(b.fighters[i].position,anchor.position)<650 {
+                if members.contains(where:{simd_distance(b.fighters[$0].position,b.fighters[i].position)<240}) { members.insert(i); changed = true }
+            }
+        }
+        let group = live.filter { members.contains($0) }.map { b.fighters[$0] }
         let center = group.reduce(V3.zero) { $0+$1.position }/Float(group.count)
         let radius = group.map { simd_distance($0.position,center)+$0.faction.collisionRadius }.max() ?? 20
         let fov: Float = 49
@@ -126,15 +183,24 @@ final class CinematicDirector {
             var best = -Float.infinity
             // Establish from an open side of the asteroid cluster so the hulls
             // are readable instead of hidden behind a foreground boulder.
-            for step in 0..<8 {
-                let a = b.time*0.026+Float(step)*tau/8
-                let direction = unit(b.arenaRotation.act(V3(sin(a)*0.8,0.65,cos(a)*0.8)))
+            for step in 0..<16 {
+                let a = b.time*0.026+Float(step%8)*tau/8
+                let elevation: Float = step<8 ? 0.65 : 1.5
+                let direction = unit(b.arenaRotation.act(V3(sin(a)*0.8,elevation,cos(a)*0.8)))
                 let point = center+direction*distance
                 let visible = group.reduce(Float(0)) { total,f in
                     let blocked = b.rocks.contains { sphereImpact(from:point,to:f.position,center:$0.position,radius:$0.radius) != nil }
                     return total+(blocked ? 0 : (f.side == anchor.side ? 1 : 2))
                 }
-                if visible>best { best = visible; overviewDirection = direction }
+                let view = -direction
+                let foreground = b.rocks.reduce(Float(0)) { total,rock in
+                    let offset = rock.position-point, d = simd_length(offset)
+                    if d<rock.radius+12 { return total+5 }
+                    guard simd_dot(offset,view)>0, d<distance*1.2, simd_dot(unit(offset),view)>0.6 else { return total }
+                    return total+min(3,rock.radius*rock.radius/max(1,d*d)*30)
+                }
+                let score = visible-foreground
+                if score>best { best = score; overviewDirection = direction }
             }
         }
         var outward = overviewDirection
@@ -155,7 +221,8 @@ final class CinematicDirector {
         if b.automatic, let flight = arrivalFlight, flight.start>coveredFlight, b.time>=flight.start, b.time-flight.start<1.1 {
             coveredFlight = flight.start; begin(.formation,in:b)
         }
-        if event == .none && b.automatic && b.cameraAge>shotLength { b.nextCamera() }
+        if event == .none && b.automatic && b.cameraIndex != 2 && b.cameraAge>shotLength { endEvent(in:b) }
+        considerCriticalMoment(in:b)
         let up = V3(0,1,0)
         var desired = b.cameraPosition, look = b.cameraLook
         var fov: Float = 51
@@ -199,6 +266,21 @@ final class CinematicDirector {
             }
         } else if event == .carrierArrival || event == .carrierDeparture {
             endEvent(in:b); update(0,in:b); return
+        } else if event == .attack {
+            let f = b.fighters[b.followedIndex]
+            guard let index = engagementTarget, f.active, b.fighters[index].active, eventAge<2.6 else {
+                endEvent(in:b); update(0,in:b); return
+            }
+            let target = b.fighters[index]
+            heading = unit(mix(heading,f.forward,1-exp(-dt*3)))
+            let right = unit(simd_cross(heading,up))
+            let center = mix(f.position,target.position,0.48)
+            desired = center-heading*40+right*43+up*25; look = center
+            fov = min(65,48+simd_distance(f.position,target.position)*0.11)
+        } else if event == .explosion {
+            let drift = explosionVelocity*eventAge*0.18
+            desired = explosionCamera+drift; look = explosionOrigin+drift; fov = 48
+            if eventAge>1.7 { endEvent(in:b); update(0,in:b); return }
         } else if event == .spin {
             let f = b.fighters[b.followedIndex]
             let right = unit(simd_cross(heading,up))

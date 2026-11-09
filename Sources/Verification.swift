@@ -26,8 +26,9 @@ func renderPlanetReview(directory: URL) {
     camera.camera!.wantsExposureAdaptation = false
     renderer.scene = scene; renderer.pointOfView = camera; scene.rootNode.addChildNode(camera)
     let sun = unit(V3(-0.4,0.3,0.86)), tangent = unit(simd_cross(sun,V3(0,1,0)))
-    for seed: UInt64 in [42,2026] {
-        let planet = ProceduralPlanet(seed:seed,radius:300,sun:sun)
+    for biome in PlanetBiome.allCases {
+      for seed: UInt64 in [42,2026] {
+        let planet = ProceduralPlanet(seed:seed,radius:300,sun:sun,biome:biome)
         scene.rootNode.addChildNode(planet.node)
         for (name,degrees,time) in [("day",25.0,Float(0)),("terminator",80.0,0),("crescent",130.0,0),("night",165.0,0),("rotated",25.0,600)] {
             let angle = Float(degrees)*Float.pi/180
@@ -36,9 +37,9 @@ func renderPlanetReview(directory: URL) {
             planet.update(time:time)
             let image = renderer.snapshot(atTime:Double(time),with:NSSize(width:1200,height:900),antialiasingMode:.multisampling4X)
             let bitmap = NSBitmapImageRep(data:image.tiffRepresentation!)!
-            try! bitmap.representation(using:.png,properties:[:])!.write(to:directory.appendingPathComponent("planet-\(seed)-\(name).png"))
-            print("Rendered planet \(seed) \(name)"); fflush(stdout)
-            if seed == 42 && name == "day" {
+            try! bitmap.representation(using:.png,properties:[:])!.write(to:directory.appendingPathComponent("planet-\(biome.slug)-\(seed)-\(name).png"))
+            print("Rendered planet \(biome.slug) \(seed) \(name)"); fflush(stdout)
+            if biome == .temperate && seed == 42 && name == "day" {
                 for (layer,hideSurface,hideCloud,hideAtmosphere) in [("surface",false,true,true),("surface-clouds",false,false,true),("atmosphere",true,true,false)] {
                     planet.surface.isHidden = hideSurface; planet.clouds.isHidden = hideCloud; planet.atmosphere.isHidden = hideAtmosphere
                     let preview = renderer.snapshot(atTime:0,with:NSSize(width:1200,height:900),antialiasingMode:.multisampling4X)
@@ -49,11 +50,117 @@ func renderPlanetReview(directory: URL) {
             }
         }
         planet.node.removeFromParentNode()
+      }
     }
 }
 
 private func check(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { print("FAIL: \(message)"); fflush(stdout); exit(1) }
+}
+
+private func pursuitRing(seed: UInt64) -> (Dogfight,[Int]) {
+    let b = Dogfight(seed:seed,initialFactions:[.colonial,.cylon],initialArrivals:false)
+    b.automatic = false
+    for rock in b.rocks { rock.node.removeFromParentNode() }; b.rocks.removeAll()
+    let roster = [0,1,4,5] // Alternating Vipers and Raiders, all with equal cruise speed.
+    for i in b.fighters.indices where !roster.contains(i) { b.fighters[i].state = .destroyed; b.fighters[i].node.isHidden = true }
+    for (slot,index) in roster.enumerated() {
+        let angle = Float(slot)*tau/4, f = b.fighters[index]
+        b.activateFlight(f,position:V3(sin(angle)*110,250,cos(angle)*110),forward:V3(cos(angle),0,-sin(angle)),speed:56)
+        f.entry = .none; f.attackTarget = roster[(slot+1)%roster.count]; f.cooldown = 0
+    }
+    return (b,roster)
+}
+
+func verifyPursuitLimits() {
+    let (selection,_) = pursuitRing(seed:313)
+    let pilot = selection.fighters[0]
+    selection.fighters[4].state = .destroyed; selection.fighters[4].node.isHidden = true
+    let extra = selection.fighters[2]; extra.state = .active; extra.node.isHidden = false
+    selection.activateFlight(pilot,position:V3(0,250,0),forward:V3(0,0,-1),speed:56)
+    selection.activateFlight(selection.fighters[1],position:V3(0,250,-80),forward:V3(1,0,0),speed:56)
+    selection.activateFlight(extra,position:V3(30,250,-30),forward:V3(1,0,0),speed:56)
+    selection.activateFlight(selection.fighters[5],position:V3(0,250,-240),forward:V3(1,0,0),speed:56)
+    selection.time = 20; pilot.attackTarget = 1; pilot.pursuitTarget = 1
+    pilot.pursuitGeneration = selection.fighters[1].generation; pilot.pursuitDeadline = 19; pilot.burstShotsLeft = 4
+    let before = pilot.position
+    selection.updateFlight(pilot,dt:1.0/60,positions:selection.fighters.map(\.position),velocities:selection.fighters.map(\.velocity),active:selection.fighters.map(\.active))
+    check(pilot.attackTarget == 2,"Timed-out pilot did not choose the next-nearest alternative enemy")
+    check(pilot.burstShotsLeft == 0 && pilot.breakUntil>selection.time,"Pilot did not break off its expired attack")
+    check(simd_distance(before,pilot.position)<2,"Pursuit break teleported the ship")
+    let window = pilot.pursuitDeadline-pilot.breakUntil
+    check(window>=5 && window<=10,"Next pursuit is not limited to 5–10 seconds")
+    check(!selection.fire(from:0,to:2),"Pilot kept firing during its breakaway")
+    // With no other enemy, retain the opponent but leave the old pursuit plane.
+    for i in [1,5] { selection.fighters[i].state = .destroyed; selection.fighters[i].node.isHidden = true }
+    selection.time = pilot.pursuitDeadline+0.1
+    let forward = pilot.forward
+    selection.breakPursuit(pilot,target:2,positions:selection.fighters.map(\.position))
+    check(pilot.attackTarget == 2 && simd_dot(forward,pilot.breakDirection)<0.8,"Single-enemy fallback did not manoeuvre before re-engaging")
+    for seed: UInt64 in [42,2026,51966,919] {
+        autoreleasepool {
+            let (b,roster) = pursuitRing(seed:seed)
+            // Hold damage off long enough for all four pilots to exhaust a
+            // pursuit window; an early broadside kill must not bypass this check.
+            for i in roster { b.fighters[i].cooldown = 10000 }
+            for _ in 0..<720 { b.update(dt:1.0/60) }
+            check(roster.allSatisfy{b.fighters[$0].active && b.fighters[$0].pursuitBreakCount>0},"A pilot failed to abandon an unsuccessful pursuit within ten seconds")
+            for i in roster { b.fighters[i].cooldown = 0 }
+            var firstHit: Float?, firstLoss: Float?
+            for _ in 0..<5400 {
+                b.update(dt:1.0/60)
+                if firstHit == nil && b.weaponHits>0 { firstHit = b.time }
+                if firstLoss == nil && roster.contains(where:{b.fighters[$0].state == .destroyed || b.fighters[$0].generation>0}) { firstLoss = b.time }
+                if firstHit != nil && firstLoss != nil { break }
+            }
+            check(firstHit != nil && firstLoss != nil,"Four equal-speed ships remained in a pursuit loop for seed \(seed): \(b.shots) bolts, \(b.weaponHits) hits, \(b.pursuitBreaks) breaks")
+            print("PASS pursuit seed \(seed): first hit at \(firstHit!)s, first loss at \(firstLoss!)s; \(b.pursuitBreaks) tactical breaks.")
+            fflush(stdout)
+        }
+    }
+    print("PASS: 5–10 second pursuit windows, next-nearest retargeting, bounded breakaways, single-opponent manoeuvring, and four-ship chase-ring progress.")
+}
+
+private func furballFixture() -> Dogfight {
+    let b = Dogfight(seed:141,initialFactions:[.rebel,.empire],initialArrivals:false)
+    for rock in b.rocks { rock.node.removeFromParentNode() }
+    b.rocks.removeAll()
+    for (i,f) in b.fighters.enumerated() {
+        let angle = Float(i)*tau/12
+        b.activateFlight(f,position:V3(sin(angle)*190,250+Float(i%3)*10,cos(angle)*190),forward:V3(0,0,-1),speed:50)
+        f.cooldown = 10000
+    }
+    b.director.prepareShot(in:b); b.cut = true; b.updateCamera(0)
+    return b
+}
+
+private func verifyCriticalDirector() {
+    let b = furballFixture()
+    b.director.nextHighlightTime = 10000
+    let cuts = b.director.hardCuts
+    for _ in 0..<1200 {
+        b.time += 1.0/30; b.cameraAge += 1.0/30; b.updateCamera(1.0/30)
+        check(b.cameraIndex == 2 && b.director.event == .none,"Automatic camera cycled away from the furball without an event")
+    }
+    check(b.director.hardCuts == cuts,"A quiet furball triggered arbitrary camera cuts")
+    let view = unit(b.cameraLook-b.cameraPosition)
+    check(b.fighters.allSatisfy{simd_dot(unit($0.position-b.cameraPosition),view)>cos(24*Float.pi/180)},"Wide shot omitted fighters on the furball's edges")
+    let a = b.fighters[0], target = b.fighters.first{$0.side != a.side}!
+    b.activateFlight(a,position:V3(0,250,40),forward:V3(0,0,-1),speed:50)
+    b.activateFlight(target,position:V3(0,250,-40),forward:V3(0,0,-1),speed:40)
+    a.attackTarget = b.fighters.firstIndex{$0 === target}; a.burstShotsLeft = 4; target.hitPoints = 2
+    b.director.nextHighlightTime = 0; b.director.considerCriticalMoment(in:b)
+    check(b.director.event == .attack,"Critical firing opportunity did not trigger an attack shot")
+    b.updateCamera(0)
+    let attackCut = b.director.hardCuts
+    b.destroy(target); b.updateCamera(1.0/60)
+    check(b.director.event == .explosion && b.director.hardCuts == attackCut,"Attack-to-explosion tracking introduced an unnecessary cut")
+    for _ in 0..<65 { b.time += 1.0/30; b.cameraAge += 1.0/30; b.updateCamera(1.0/30) }
+    check(b.director.event == .none && b.cameraIndex == 2 && b.director.nextHighlightTime>b.time+8,"Highlight did not return to an uninterrupted wide hold")
+    b.automatic = false; b.cameraIndex = 3; b.cut = true; b.updateCamera(0)
+    b.director.requestSpin(0,in:b); b.director.considerCriticalMoment(in:b)
+    check(b.director.event == .none && b.cameraIndex == 3,"Critical director overrode manual mode")
+    print("PASS: whole-furball framing; forty seconds with no arbitrary cuts; critical attack and explosion continuity; wide return/dwell; manual camera control.")
 }
 
 private func distantSquadrons() -> Dogfight {
@@ -267,6 +374,8 @@ private func verifyContinuousDeployments() {
 }
 
 func verifySimulation() {
+    verifyPursuitLimits()
+    verifyCriticalDirector()
     verifyBattlefieldFraming()
     verifyShipTraffic()
     verifyWeaponsAndMotion()
@@ -282,14 +391,18 @@ func verifySimulation() {
             let fingerprint = battle.rocks.prefix(5).map { String(describing:$0.position) }.joined()
             check(fingerprints.insert(fingerprint).inserted,"Arena seeds did not change the layout")
             let initialNodes = battle.persistentNodeCount
-            var cameraVisits = Set<Int>()
+            var wideFrames = 0, combatFrames = 0
             var maxLasers = 0, maxSparks = 0, maxEffects = 0, maxBlasts = 0
             var smallestShipClearance: Float = 999, smallestCameraClearance: Float = 999
             var activeSeconds: Float = 0
             for frame in 0..<18000 {
                 activeSeconds += Float(battle.activeCount)/30
                 battle.update(dt:1.0/30.0)
-                cameraVisits.insert(battle.cameraIndex)
+                let event = battle.director.event
+                if event != .formation && event != .carrierArrival && event != .carrierDeparture && battle.activeCount>0 {
+                    combatFrames += 1
+                    if event == .none && battle.cameraIndex == 2 { wideFrames += 1 }
+                }
                 maxLasers = max(maxLasers,battle.lasers.count)
                 maxSparks = max(maxSparks,battle.sparks.count)
                 maxEffects = max(maxEffects,battle.effects.count)
@@ -332,8 +445,12 @@ func verifySimulation() {
                     }
                 }
             }
-            check(cameraVisits.count == 6,"Not all cameras were visited")
-            check(maxLasers<250 && maxSparks<1500 && maxEffects<100 && maxBlasts<40,"Unbounded effects")
+            let wideShare = Float(wideFrames)/Float(max(1,combatFrames))
+            check(wideShare>0.65,"Combat was not predominantly shown as a furball: \(wideShare)")
+            check(battle.director.attackCuts+battle.director.explosionCuts+battle.director.dangerCuts>0,"Critical moments did not trigger camera coverage")
+            // Twelve fighters can briefly sustain ~360 bolts with five-volley
+            // bursts and a 1.8-second lifetime. Node cleanup is checked separately.
+            check(maxLasers<400 && maxSparks<1500 && maxEffects<100 && maxBlasts<40,"Unbounded effects: \(maxLasers) bolts / \(maxSparks) sparks / \(maxEffects) effects / \(maxBlasts) blasts")
             check(battle.destroyed>5 && battle.minimumFleet<=7,"No meaningful fleet attrition")
             check(Float(battle.shots)/max(1,activeSeconds)>0.8 && battle.weaponHits>50,"Pilots did not sustain aggressive, effective gunfire")
             check(battle.waveNumber>2 && battle.reinforcements>12,"No reinforcement waves")
@@ -343,7 +460,7 @@ func verifySimulation() {
             check(battle.spinOuts>0 && battle.recoveries+battle.asteroidLosses>0,"No asteroid incidents")
             check(smallestShipClearance>5,"Fighter intersects asteroid in seed \(seed): clearance \(smallestShipClearance)")
             check(smallestCameraClearance>0,"Camera enters asteroid in seed \(seed): clearance \(smallestCameraClearance)")
-            print("PASS seed \(seed): 10 minutes, 6 cameras; \(battle.replacementCount) faction replacements, \(battle.encounteredFactions.map(\.rawValue).sorted()); \(battle.blinkArrivals)/\(battle.blinkDepartures) blink jumps; \(battle.destroyed) losses, \(battle.waveNumber) waves; \(battle.spinOuts) asteroid strikes / \(battle.recoveries) recoveries; \(battle.shipCollisions) ship collisions / \(battle.shipCollisionLosses) collision losses; min normal ship/camera clearance \(smallestShipClearance)/\(smallestCameraClearance); max effects \(maxLasers)/\(maxSparks)/\(maxEffects)/\(maxBlasts).")
+            print("PASS seed \(seed): 10 minutes, \(Int(wideShare*100))% wide combat, \(battle.director.attackCuts)/\(battle.director.explosionCuts)/\(battle.director.dangerCuts) attack/explosion/danger highlights; \(battle.replacementCount) faction replacements; \(battle.destroyed) losses; \(battle.shipCollisions) ship collisions; min normal ship/camera clearance \(smallestShipClearance)/\(smallestCameraClearance); max effects \(maxLasers)/\(maxSparks)/\(maxEffects)/\(maxBlasts).")
             fflush(stdout)
         }
     }
@@ -462,12 +579,15 @@ func renderReview(directory: URL) {
     }
     for _ in 0..<90 { battle.update(dt:1.0/30.0) }
     for i in 0..<6 {
-        if i>0 { battle.nextCamera(); battle.update(dt:0) }
+        battle.cameraIndex = i; battle.cut = true; battle.director.prepareShot(in:battle); battle.update(dt:0)
         save("camera-\(i+1)",at:Double(battle.time))
     }
     let distant = distantSquadrons()
     renderer.scene = distant.scene; renderer.pointOfView = distant.camera
     save("battlefield-distant-squadron",at:0)
+    let furball = furballFixture()
+    renderer.scene = furball.scene; renderer.pointOfView = furball.camera
+    save("battlefield-whole-furball",at:0)
     renderer.scene = battle.scene; renderer.pointOfView = battle.camera
     // Inspect combat effects and real arrival geometry, including the separate warp streak.
     battle.cameraIndex = 2

@@ -43,7 +43,7 @@ extension Faction {
 extension Dogfight {
     @discardableResult func fire(from index: Int, to targetIndex: Int) -> Bool {
         let f = fighters[index], target = fighters[targetIndex]
-        guard f.active, f.spin == nil, target.active, f.side != target.side else { return false }
+        guard f.active, f.spin == nil, time>=f.breakUntil, target.active, f.side != target.side else { return false }
         let barrels = f.firingMuzzles
         let aligned = barrels.contains { muzzle in
             let matrix = muzzle.simdWorldTransform, origin = matrix.columns.3.xyz, forward = unit(-matrix.columns.2.xyz)
