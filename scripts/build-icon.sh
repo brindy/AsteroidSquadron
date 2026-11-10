@@ -11,10 +11,13 @@ icon_work="$(mktemp -d "$PWD/.cache/icon.XXXXXX")"
 trap 'rm -rf "$icon_work"' EXIT
 icon_set="$icon_work/AppIcon.iconset"
 mkdir "$icon_set"
-for icon_size in 16 32 128 256 512; do
-    sips -z "$icon_size" "$icon_size" "$icon_source" --out "$icon_set/icon_${icon_size}x${icon_size}.png" >/dev/null
-    icon_retina=$((icon_size * 2))
-    sips -z "$icon_retina" "$icon_retina" "$icon_source" --out "$icon_set/icon_${icon_size}x${icon_size}@2x.png" >/dev/null
-done
+mkdir -p "$PWD/.cache/clang"
+# Compile the small native layout helper when its source changes.
+icon_renderer="$PWD/.cache/render-app-icon"
+if [[ ! -x "$icon_renderer" || scripts/RenderAppIcon.swift -nt "$icon_renderer" ]]; then
+    xcrun swiftc -O -module-cache-path "$PWD/.cache/clang" scripts/RenderAppIcon.swift -o "$icon_work/render-app-icon"
+    install -m 755 "$icon_work/render-app-icon" "$icon_renderer"
+fi
+"$icon_renderer" "$icon_source" "$icon_set"
 iconutil -c icns "$icon_set" -o "$icon_output"
 print "Icon: $icon_output"

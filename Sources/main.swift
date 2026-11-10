@@ -1124,6 +1124,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let output = URL(fileURLWithPath:CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png")
         let image = view.snapshot()
         if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data:tiff), let png = bitmap.representation(using:.png,properties:[:]) { try? png.write(to:output) }
+        // Export the actual NSApplication icon as part of an explicit smoke
+        // test, so launch-time overrides and bundled artwork can be checked.
+        if let data = NSApp.applicationIconImage?.tiffRepresentation,
+           let icon = NSBitmapImageRep(data:data),
+           let png = icon.representation(using:.png,properties:[:]) {
+            try? png.write(to:output.deletingPathExtension().appendingPathExtension("app-icon.png"))
+        }
         writeRuntimeStatus()
     }
     func writeRuntimeStatus() {
