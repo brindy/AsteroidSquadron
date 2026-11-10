@@ -33,6 +33,7 @@ extension Fighter {
 extension Dogfight {
     func activateFlight(_ f: Fighter, position: V3, forward: V3, speed: Float) {
         f.position = position; f.forward = unit(forward); f.velocity = f.forward*speed
+        f.steeringDirection = f.forward; f.aimDirection = f.forward
         f.navigationUp = V3(0,1,0); f.bank = 0; f.motionInitialized = true
         f.pursuitTarget = nil; f.pursuitGeneration = -1; f.pursuitDeadline = 0
         f.pursuitBreakCount = 0
@@ -122,6 +123,15 @@ extension Dogfight {
         }
         let traffic = shipAvoidance(f,positions:positions,velocities:velocities,active:active,speed:&speed)
         desired = unit(desired+avoidance+traffic)
+        // Pilot intent is a smooth control signal, not every new intercept / sensor
+        // sample. Ignore sub-degree hunting; urgent avoidance gets a faster response.
+        let urgent = simd_length_squared(avoidance)>0.25 || simd_length_squared(traffic)>0.5
+        let steeringRate: Float = urgent ? 12 : 6.0
+        if urgent || simd_dot(desired,f.steeringDirection)<0.99985 {
+            f.steeringDirection = unit(mix(f.steeringDirection,desired,1-exp(-dt*steeringRate)))
+        }
+        desired = f.steeringDirection
+        f.aimDirection = unit(mix(f.aimDirection,unit(goal-f.position),1-exp(-dt*4)))
         let acceleration: V3
         if f.faction == .earth {
             let hazard = simd_length_squared(avoidance)>0.06 || simd_length_squared(traffic)>0.25
@@ -135,7 +145,7 @@ extension Dogfight {
             }
             let pivoting = time<f.pivotUntil
             let burning = !pivoting && time<f.pivotUntil+1.3
-            let nose = pivoting ? unit(goal-f.position) : (burning ? f.pivotExit : desired)
+            let nose = pivoting ? f.aimDirection : (burning ? f.pivotExit : desired)
             f.forward = turnToward(f.forward,nose,radians:f.turnRate*dt)
             if pivoting { f.pivotExit = f.forward }
             // Brake to a slow inertial drift while RCS turns the hull. The short
@@ -160,8 +170,10 @@ extension Dogfight {
         let level = V3(0,1,0)-f.forward*simd_dot(V3(0,1,0),f.forward)
         if simd_length_squared(level)>0.08 { f.navigationUp = unit(mix(f.navigationUp,unit(level),1-exp(-dt*0.45))) }
         let right = unit(simd_cross(f.forward,f.navigationUp))
-        let desiredBank = f.faction == .earth && time<f.pivotUntil ? 0 : -simd_dot(acceleration,right)/f.accelerationLimit*0.7
-        f.bank += (desiredBank-f.bank)*(1-exp(-dt*4))
+        let rawBank: Float = f.faction == .earth && time<f.pivotUntil ? 0 : -simd_dot(acceleration,right)/f.accelerationLimit*0.7
+        let desiredBank: Float = abs(rawBank)<0.045 ? 0 : rawBank
+        let bankStep = (desiredBank-f.bank)*(1-exp(-dt*2.8))
+        f.bank += max(-dt*0.85,min(dt*0.85,bankStep))
         f.applyFlightPose()
         if f.spin == nil { tryAsteroidStrike(f,from:old,dt:dt) }
     }

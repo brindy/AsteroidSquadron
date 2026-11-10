@@ -187,6 +187,11 @@ final class Fighter {
     var faction: Faction
     let side: Int
     var generation = 0
+    var encountersSurvived = 0
+    var isAce: Bool { encountersSurvived>=4 }
+    let tally = PilotTally()
+    var steeringDirection = V3(0,0,-1)
+    var aimDirection = V3(0,0,-1)
     var orbitRate: Float = 0.185
     var scanner: SCNNode?
     var jumpClipper: JumpClipper?
@@ -248,6 +253,7 @@ final class Fighter {
     func replaceFaction(_ replacement: Faction) {
         for child in node.childNodes { child.removeFromParentNode() }
         faction = replacement; generation += 1
+        encountersSurvived = 0; tally.reset()
         node.addChildNode(replacement.fighterModel())
         scanner = node.childNode(withName:"scanner",recursively:true)
         cacheMuzzles()
@@ -378,6 +384,10 @@ final class Dogfight {
     var replacementCount = 0
     var encounteredFactions = Set<Faction>()
     var starfuryPivots = 0
+    var squadronEncounters = [0,0]
+    var encountersCompleted = 0
+    var acePromotions = 0
+    var topUpWaves = 0
     var nextArrivalTime: Float = 0
     var persistentNodeCount = 0
     var blinkArrivals = 0
@@ -505,17 +515,7 @@ final class Dogfight {
     }
 
     func makeStars() {
-        var vertices: [SCNVector3] = []
-        for _ in 0..<4200 {
-            let p = unit(rng.vector(1)) * rng.range(1800,2600)
-            vertices.append(SCNVector3(p))
-        }
-        let g = SCNGeometry(sources: [SCNGeometrySource(vertices: vertices)], elements: [SCNGeometryElement(indices: (0..<Int32(vertices.count)).map{$0}, primitiveType: .point)])
-        g.elements[0].pointSize = 1.8; g.elements[0].minimumPointScreenSpaceRadius = 0.65; g.elements[0].maximumPointScreenSpaceRadius = 1.6
-        let m = material(color(0.64,0.76,0.85), emission: color(0.64,0.76,0.85))
-        m.lightingModel = .constant; m.readsFromDepthBuffer = false; m.writesToDepthBuffer = false
-        let stars = node(g,m); stars.renderingOrder = -10
-        scene.rootNode.addChildNode(stars)
+        makeStarfieldSkybox()
     }
     func makeClouds() {
         let palettes = [color(0.19,0.37,0.49),color(0.31,0.23,0.43),color(0.16,0.39,0.37)]
@@ -641,6 +641,7 @@ final class Dogfight {
                 }
             } else { updateFlight(f,dt:dt,positions:positions,velocities:velocities,active:active) }
             f.scanner?.simdPosition.x = sin(time*3+Float(f.pair))*0.49
+            f.tally.updatePose(f)
         }
         resolveShipCollisions(from:positions,wasActive:active,dt:dt)
         for f in fighters {
@@ -1010,6 +1011,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             lastHUD = now
             let duration = Int(now-startTime)
             telemetry.stringValue = String(format:"%02d %@ / %02d %@   ·   WAVE %02d   ·   %02d:%02d:%02d",battle.sideCount(0),battle.sideFactions[0].fighterName,battle.sideCount(1),battle.sideFactions[1].fighterName,battle.waveNumber,duration/3600,(duration/60)%60,duration%60)
+            let aces = battle.fighters.filter { $0.active && $0.isAce }.count
+            if aces>0 { telemetry.stringValue += "   ·   \(aces) ACE\(aces == 1 ? "" : "S")" }
             sector.stringValue = String(format:"PROCEDURAL ARENA  /  SECTOR %08llX",battle.seed & 0xFFFFFFFF)+"  /  "+(battle.planet?.biome.title ?? "")
             if let request = battle.fleetRequests.min(by:{$0.countdown<$1.countdown}) {
                 eventStatus.stringValue = String(format:"%@ INBOUND / ETA %02d SEC",battle.sideFactions[request.side].title,max(0,Int(ceil(request.countdown))))
@@ -1102,12 +1105,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateCameraHUD(); showControls()
     }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "",.credits:NSAttributedString(string:"An endless, procedural crossover starfighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars and Battlestar Galactica belong to their respective owners.")])
+        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "",.credits:NSAttributedString(string:"An endless, procedural crossover starfighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners.")])
     }
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars and Battlestar Galactica belong to their respective owners."
+        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. Four-encounter pilots become aces with gold scratch-mark tallies. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }
@@ -1133,7 +1136,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard CommandLine.arguments.contains("--smoke-test"), let battle, let window else { return }
         let path = CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png"
         let output = URL(fileURLWithPath:path)
-        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"pursuitBreaks":battle.pursuitBreaks,"starfuryPivots":battle.starfuryPivots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
+        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"pursuitBreaks":battle.pursuitBreaks,"aces":battle.fighters.filter(\.isAce).filter(\.active).count,"encounters":battle.encountersCompleted,"topUpWaves":battle.topUpWaves,"starfuryPivots":battle.starfuryPivots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }
@@ -1143,7 +1146,11 @@ func requestedSeed() -> UInt64 {
     return UInt64.random(in:1...UInt64.max)
 }
 
-if CommandLine.arguments.contains("--verify-simulation") {
+if CommandLine.arguments.contains("--verify-veterans") {
+    verifyVeteransAndSkybox()
+} else if let index = CommandLine.arguments.firstIndex(of:"--render-veteran-review"), index+1<CommandLine.arguments.count {
+    renderVeteranReview(directory:URL(fileURLWithPath:CommandLine.arguments[index+1]))
+} else if CommandLine.arguments.contains("--verify-simulation") {
     verifySimulation()
 } else if CommandLine.arguments.contains("--verify-babylon") {
     verifyBabylon()

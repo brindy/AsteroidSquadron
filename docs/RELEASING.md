@@ -24,7 +24,7 @@ Apple's [notarization guide](https://developer.apple.com/documentation/security/
 ## Create and publish a release
 
 1. Update `VERSION`, increment `BUILD_NUMBER`, and add `releases/v<VERSION>.md`.
-2. Review and commit all changes. The publication command rejects a dirty checkout.
+2. Review and commit all changes. The release command rejects a dirty checkout.
 3. Run:
 
    ```sh
@@ -35,9 +35,20 @@ Apple's [notarization guide](https://developer.apple.com/documentation/security/
 
 The script builds the arm64 and x86_64 slices, combines them, signs with hardened runtime and a secure timestamp, and verifies the signature. It runs native flight and jump-arrival checks, notarizes and staples the app, builds a drag-to-Applications DMG, and notarizes and staples that DMG too. The final ZIP contains the already-stapled app. Gatekeeper assessments and checksum generation must pass before publication. Notarization receipts and diagnostic logs stay in the ignored `build/releases/v<VERSION>/` folder.
 
-Publication pushes the source commit, creates and pushes an annotated `v<VERSION>` tag, then uploads the DMG, ZIP and checksums to a GitHub release. No tags or assets are force-replaced. The script stops if the version was already released; increment the version for another public build.
+Publication pushes the source commit, creates and pushes an annotated `v<VERSION>` tag, then uploads the DMG, ZIP and checksums to a GitHub release. No tags or assets are force-replaced. Approved app bundles and receipts are preserved on reruns; publishing an already prepared version reuses its verified files rather than rebuilding it. The script stops if the version was already released; increment the version for another public build.
 
 Apple processing can take a while. If a submission times out, use its ID in the JSON receipt with `xcrun notarytool info`, `log`, or `wait` and the same `--keychain-profile`. The service keeps processing after the local timeout. Do not publish a pending or rejected submission, or repeatedly resubmit it. If publication fails after the notarized artifacts and tag were created, the artifacts remain locally; upload those existing validated files with `gh release create` (or `gh release upload` for an existing draft) rather than re-notarizing them.
+
+## Publish an already approved package
+
+To upload existing notarized files without rebuilding or altering the app:
+
+```sh
+./scripts/publish-release.sh --check v1.14  # Read-only artifact validation
+./scripts/publish-release.sh v1.14          # Explicitly publish to GitHub
+```
+
+The publisher verifies the recorded SHA-256 values, Apple acceptance receipts, app identity/version, code signature, stapled tickets and Gatekeeper. It tags the exact source commit recorded in the evidence, even if the working branch has moved on. It never needs the Apple password, changes the bundle, or overwrites an existing release. The builder without `--publish` never creates a GitHub release.
 
 ## Local development builds
 
@@ -50,6 +61,6 @@ Apple processing can take a while. If a submission times out, use its ID in the 
 
 `package.sh` only creates and verifies a disk image. It does **not** notarize it. Local ad hoc builds are for testing, not the signed public download.
 
-All building, signing, notarization, verification and packaging run locally. There are no GitHub Actions workflows or cloud signing secrets. GitHub hosts the source repository and published releases only. The local release command runs native flight checks and rendered GPU arrival checks before notarization.
+All building, signing, notarization, verification and packaging run locally. There are no GitHub Actions workflows or cloud signing secrets. GitHub hosts the source repository and published releases only. The local release command runs native flight checks, rendered GPU arrival checks, and the veteran/skybox checks before notarization. On Apple Silicon with Rosetta already installed, it also runs the Intel flight regression locally under Rosetta. It never installs Rosetta automatically.
 
 Keep build products, `.p12` certificates, `.p8` keys, passwords and notarization receipts out of Git. The `.gitignore` covers the standard paths and credential extensions. Never commit an exported private key to set up signing.

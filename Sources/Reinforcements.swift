@@ -28,6 +28,10 @@ extension Dogfight {
     func requestReplacement(for side: Int) {
         let roster = fighters.filter { $0.side == side }
         guard !pendingSides.contains(side), roster.allSatisfy({$0.state == .destroyed}), !carriers.contains(where:{$0.side == side}) else { return }
+        // Credit and stage the winning squadron's replacements first. Global
+        // arrival scheduling then keeps the next enemy behind that deployment.
+        creditEncounter(surviving:1-side)
+        squadronEncounters[side] = 0
         let previous = sideFactions[side]
         let options = Faction.allCases.filter { $0 != previous && $0 != sideFactions[1-side] }
         let next = options[rng.index(options.count)]
@@ -42,7 +46,7 @@ extension Dogfight {
     }
 
     func updateReinforcements(_ dt: Float) {
-        // Partial squadrons stay depleted. A new faction is chosen only after total defeat.
+        // Only defeated factions rotate. Veteran top-ups are staged before their next opponent.
         for side in 0..<2 { requestReplacement(for:side) }
         for i in fleetRequests.indices.reversed() {
             fleetRequests[i].countdown -= dt
@@ -60,9 +64,14 @@ extension Dogfight {
         }
     }
 
-    func deployReinforcements(side: Int) {
-        let squadron = fighters.indices.filter { fighters[$0].side == side }
-        guard squadron.allSatisfy({fighters[$0].state == .destroyed}) else { return }
+    func deployReinforcements(side: Int, topUp: Bool = false) {
+        let roster = fighters.indices.filter { fighters[$0].side == side }
+        let squadron = topUp ? roster.filter { fighters[$0].state == .destroyed } : roster
+        guard !squadron.isEmpty, squadron.allSatisfy({fighters[$0].state == .destroyed}) else { return }
+        if topUp {
+            guard roster.contains(where:{fighters[$0].active}), squadronEncounters[side]>=2 else { return }
+            topUpWaves += 1
+        }
         let faction = sideFactions[side]
         let start = max(time,nextArrivalTime)
         nextArrivalTime = start+(faction == .shadow ? 7.2 : 6.5)

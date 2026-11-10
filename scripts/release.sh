@@ -18,13 +18,21 @@ app_version="$(< VERSION)"
 release_tag="v$app_version"
 source_commit="$(git rev-parse HEAD)"
 release_notes="$PWD/releases/$release_tag.md"
+# Preserve approved bundles and receipts, including on accidental reruns.
+if [[ -e "$PWD/build/releases/$release_tag/app-notarization.json" ]]; then
+    if $publish_release && [[ -f "$PWD/build/releases/$release_tag/RELEASE-EVIDENCE.json" ]]; then
+        exec ./scripts/publish-release.sh "$release_tag"
+    fi
+    print -u2 "Existing $release_tag files are preserved. Publish them with scripts/publish-release.sh, use a new version, or inspect a pending submission before resuming manually."
+    exit 1
+fi
 [[ -f "$release_notes" ]] || { print -u2 "Missing release notes: $release_notes"; exit 1; }
 if [[ -z "$signing_identity" ]]; then
     signing_identity="$(security find-identity -v -p codesigning | awk -F '"' '/"Developer ID Application:/ { print $2 }')"
     [[ -n "$signing_identity" && "$signing_identity" != *$'\n'* ]] || { print -u2 'Select one Developer ID Application certificate using --identity.'; exit 1; }
 fi
+[[ -z "$(git status --porcelain)" ]] || { print -u2 'Commit all source and release changes before making a release build.'; exit 1; }
 if $publish_release; then
-    [[ -z "$(git status --porcelain)" ]] || { print -u2 'Commit all source and release changes before publishing.'; exit 1; }
     command -v gh >/dev/null || { print -u2 'Install GitHub CLI and run gh auth login first.'; exit 1; }
     gh auth status
     # Refuse to rebuild or replace an already published release.
@@ -43,6 +51,10 @@ mkdir -p "$release_dir"
 ./scripts/build.sh --universal --output "$release_app" --sign "$signing_identity"
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-pursuit > "$release_dir/flight-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-babylon > "$release_dir/arrival-checks.log" 2>&1
+"$release_app/Contents/MacOS/AsteroidSquadron" --verify-veterans > "$release_dir/veteran-checks.log" 2>&1
+if [[ "$(uname -m)" == arm64 ]] && pkgutil --pkg-info com.apple.pkg.RosettaUpdateAuto >/dev/null 2>&1; then
+    /usr/bin/arch -x86_64 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-pursuit > "$release_dir/intel-rosetta-flight-checks.log" 2>&1
+fi
 signature_info="$(codesign --display --verbose=4 "$release_app" 2>&1)"
 print -r -- "$signature_info" | grep -q '^Authority=Developer ID Application:' || { print -u2 'App is not signed with Developer ID Application.'; exit 1; }
 print -r -- "$signature_info" | grep -q 'flags=.*runtime' || { print -u2 'Hardened runtime is missing.'; exit 1; }
@@ -110,14 +122,21 @@ signature = subprocess.check_output(['codesign', '--display', '--verbose=4', str
 fields = dict(line.split('=',1) for line in signature.splitlines() if '=' in line)
 app_receipt = json.loads((folder / 'app-notarization.json').read_text())
 dmg_receipt = json.loads((folder / 'dmg-notarization.json').read_text())
+entitlements = subprocess.run(['codesign','--display','--entitlements','-',str(app)],capture_output=True,check=True).stdout
 report = {
     'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'],
     'bundleID': info['CFBundleIdentifier'], 'sourceCommit': revision,
-    'team': fields.get('TeamIdentifier'), 'signingTimestamp': fields.get('Timestamp'),
+    'team': fields.get('TeamIdentifier'),
+    'entitlements': plistlib.loads(entitlements) if entitlements.strip() else {},
+    'embeddedFrameworks': [str(p.relative_to(app)) for p in app.glob('Contents/Frameworks/*')],
+    'embeddedHelpers': [str(p.relative_to(app)) for root in ['Contents/Helpers','Contents/XPCServices','Contents/PlugIns'] for p in app.glob(root+'/*')],
+    'systemHelper': '/usr/bin/caffeinate (system-provided; not bundled)',
+    'toolchain': subprocess.check_output(['xcodebuild','-version'],text=True).strip(), 'signingTimestamp': fields.get('Timestamp'),
     'architectures': subprocess.check_output(['xcrun','lipo',str(app / 'Contents/MacOS/AsteroidSquadron'),'-archs'],text=True).strip().split(),
     'appNotarization': {'id':app_receipt['id'],'status':app_receipt['status']},
     'dmgNotarization': {'id':dmg_receipt['id'],'status':dmg_receipt['status']},
-    'verified': ['deep strict code signature','hardened runtime and secure timestamp','app and DMG stapling','Gatekeeper app and DMG assessments','ZIP extraction signature, stapling and Gatekeeper','native pursuit and rendered jump-arrival checks'],
+    'verified': ['deep strict code signature','hardened runtime and secure timestamp','app and DMG stapling','Gatekeeper app and DMG assessments','ZIP extraction signature, stapling and Gatekeeper','native pursuit and rendered jump-arrival checks','veteran top-up, ace, smooth steering and skybox checks'],
+    'intelRosettaFlightChecks': 'passed' if (folder / 'intel-rosetta-flight-checks.log').exists() else 'not run (Rosetta unavailable or host is Intel)',
     'notPerformed': ['browser-download installation test on a clean Mac'],
     'sha256': {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.iterdir()) if p.name.startswith('Asteroid-Squadron-') and p.suffix in ['.zip','.dmg']}
 }
@@ -127,14 +146,5 @@ print "Notarized release ready: $release_dir"
 print "Evidence: $release_dir/RELEASE-EVIDENCE.json"
 if $publish_release; then
     [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain)" ]] || { print -u2 'Source changed during the release. Do not publish these artifacts; rebuild from a clean commit.'; exit 1; }
-    release_commit="$source_commit"
-    # Publish the exact source used above. No force pushes or replaced assets.
-    git push origin HEAD
-    if git rev-parse --verify "refs/tags/$release_tag" >/dev/null 2>&1; then
-        [[ "$(git rev-list -n 1 "$release_tag")" == "$release_commit" ]] || { print -u2 'Local tag points to different source.'; exit 1; }
-    else
-        git tag -a "$release_tag" -m "Asteroid Squadron $app_version" "$release_commit"
-    fi
-    git push origin "refs/tags/$release_tag"
-    gh release create "$release_tag" "$release_dmg" "$release_zip" "$release_dir/SHA256SUMS" --verify-tag --repo brindy/AsteroidSquadron --title "Asteroid Squadron $app_version" --notes-file "$release_notes"
+    ./scripts/publish-release.sh "$release_tag"
 fi

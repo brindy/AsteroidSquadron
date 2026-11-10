@@ -442,6 +442,7 @@ private func verifyArrivalHandoff() {
 }
 
 func verifySimulation() {
+    verifyVeteransAndSkybox()
     verifyBabylon()
     verifyArrivalHandoff()
     verifyPursuitLimits()
@@ -530,7 +531,7 @@ func verifySimulation() {
             check(battle.spinOuts>0 && battle.recoveries+battle.asteroidLosses>0,"No asteroid incidents")
             check(smallestShipClearance>5,"Fighter intersects asteroid in seed \(seed): clearance \(smallestShipClearance)")
             check(smallestCameraClearance>0,"Camera enters asteroid in seed \(seed): clearance \(smallestCameraClearance)")
-            print("PASS seed \(seed): 10 minutes, \(Int(wideShare*100))% wide combat, \(battle.director.attackCuts)/\(battle.director.explosionCuts)/\(battle.director.dangerCuts) attack/explosion/danger highlights; \(battle.replacementCount) faction replacements; \(battle.destroyed) losses; \(battle.shipCollisions) ship collisions; \(battle.starfuryPivots) Starfury pivots; min normal ship/camera clearance \(smallestShipClearance)/\(smallestCameraClearance); max effects \(maxLasers)/\(maxSparks)/\(maxEffects)/\(maxBlasts).")
+            print("PASS seed \(seed): 10 minutes, \(Int(wideShare*100))% wide combat, \(battle.director.attackCuts)/\(battle.director.explosionCuts)/\(battle.director.dangerCuts) attack/explosion/danger highlights; \(battle.replacementCount) faction replacements; \(battle.destroyed) losses; \(battle.shipCollisions) ship collisions; \(battle.starfuryPivots) Starfury pivots; \(battle.topUpWaves) veteran top-ups; \(battle.acePromotions) ace promotions; min normal ship/camera clearance \(smallestShipClearance)/\(smallestCameraClearance); max effects \(maxLasers)/\(maxSparks)/\(maxEffects)/\(maxBlasts).")
             fflush(stdout)
         }
     }
@@ -575,7 +576,7 @@ private func verifyFactionLifecycle() {
         check(b.carriers.isEmpty,"Replacement carrier failed to depart")
     }
     check(b.replacementCount == 12 && b.encounteredFactions.count == Faction.allCases.count,"Faction selection did not cover the six-faction catalog")
-    print("PASS: no partial refills; twelve distinct-side replacements across all six factions; stale projectiles cannot damage new generations.")
+    print("PASS: no premature refills; twelve distinct-side replacements across all six factions; stale projectiles cannot damage new generations.")
 }
 
 private func verifyBlinkCarriers() {
