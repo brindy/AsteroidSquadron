@@ -62,6 +62,7 @@ extension Dogfight {
     // The title is global across both factions. A tied incumbent keeps it;
     // without an incumbent, roster order makes the tie deterministic.
     func updateAce() {
+        longestEncounterStreak = max(longestEncounterStreak,fighters.map(\.encountersSurvived).max() ?? 0)
         let qualified = fighters.indices.filter { fighters[$0].aceEligible }
         let mostKills = qualified.map { fighters[$0].enemyKills }.max()
         let leaders = qualified.filter { fighters[$0].enemyKills == mostKills }
@@ -84,6 +85,10 @@ extension Dogfight {
         }
         if let winner = acePilot, previous?.index != winner.index || previous?.generation != winner.generation {
             acePromotions += 1
+            if honouredAceGenerations[winner.index] != winner.generation {
+                acesEmerged += 1
+                honouredAceGenerations[winner.index] = winner.generation
+            }
         }
     }
 

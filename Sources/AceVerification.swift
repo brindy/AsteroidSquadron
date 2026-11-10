@@ -16,6 +16,7 @@ private func aceCombatFixture(seed: UInt64) -> Dogfight {
 
 func verifyAceLeadership() {
     let b = aceCombatFixture(seed:1616), shooter = b.fighters[0], target = b.fighters[6]
+    aceCheck(b.acesEmerged == 0 && b.longestEncounterStreak == 0,"New arena inherited Ace history")
     shooter.encountersSurvived = 3
     aceCheck(b.fire(from:0,to:6),"Ace scoring fixture could not fire")
     b.updateLasers(0.4)
@@ -32,6 +33,7 @@ func verifyAceLeadership() {
         aceCheck(shooter.isAce == (kill == 6),"Ace ignored the six-kill threshold")
     }
     aceCheck(shooter.isAce && shooter.tally.count == 4,"Three encounters / six kills should start with four scratches")
+    aceCheck(b.acesEmerged == 1 && b.longestEncounterStreak == 3,"First Ace or survival record missing")
     shooter.encountersSurvived = 4; b.updateAce()
     aceCheck(shooter.tally.count == 5,"Ace scratch count did not advance after another encounter")
     let rival = b.fighters[1], rookie = b.fighters[3]
@@ -39,7 +41,9 @@ func verifyAceLeadership() {
     rival.encountersSurvived = 3; rival.enemyKills = 6
     b.updateAce()
     aceCheck(shooter.isAce && !rival.isAce,"A kill-count tie displaced the incumbent ace")
+    aceCheck(b.acesEmerged == 1 && b.longestEncounterStreak == 4,"Tied challenger counted as a new Ace")
     rival.enemyKills = 7; b.updateAce()
+    aceCheck(b.acesEmerged == 2,"New Ace leader was not counted")
     aceCheck(rival.isAce && !shooter.isAce && shooter.tally.node.parent == nil,"A higher-kill eligible enemy did not take the sole title")
     rookie.state = .active; rookie.node.isHidden = false
     rookie.encountersSurvived = 2; rookie.enemyKills = 20
@@ -48,12 +52,26 @@ func verifyAceLeadership() {
     rookie.encountersSurvived = 3; b.updateAce()
     aceCheck(rookie.isAce && !rival.isAce,"Highest-kill qualified pilot did not take the title")
     aceCheck(b.fighters.filter(\.isAce).count == 1 && b.fighters.filter{$0.tally.count>0}.count == 1,"More than one ace marker exists")
+    aceCheck(b.acesEmerged == 3,"Third distinct Ace was not counted")
     b.destroy(rookie)
+    aceCheck(b.acesEmerged == 3,"Returning incumbent counted twice")
     aceCheck(rival.isAce && !rookie.isAce && rookie.tally.node.parent == nil,"A dead ace retained its title or badge")
     rival.replaceFaction(.cylon); b.updateAce()
     aceCheck(rival.enemyKills == 0 && rival.encountersSurvived == 0 && !rival.isAce && shooter.isAce,"Replacement pilot inherited a rank or blocked succession")
     b.destroy(shooter)
     aceCheck(b.fighters.allSatisfy{!$0.isAce && $0.tally.count == 0},"An ace remained after the final qualified pilot died")
+
+    aceCheck(b.acesEmerged == 3 && b.longestEncounterStreak == 4,"Destroyed pilots erased arena records")
+    // The same roster slot now contains a different pilot, eligible in its own right.
+    rival.state = .active; rival.node.isHidden = false
+    rival.encountersSurvived = 3; rival.enemyKills = 6; b.updateAce()
+    aceCheck(b.acesEmerged == 4 && b.longestEncounterStreak == 4,"Replacement Ace inherited or lost the old pilot's identity")
+    b.updateAce(); b.updateAce()
+    aceCheck(b.acesEmerged == 4 && b.honouredAceGenerations.count<=b.fighters.count,"Ace history grew on ordinary updates")
+    b.creditEncounter(surviving:rival.side); b.creditEncounter(surviving:rival.side)
+    aceCheck(b.longestEncounterStreak == 5,"Completed encounters did not advance the survival record")
+    b.destroy(rival); rival.replaceFaction(.earth); b.updateAce()
+    aceCheck(b.acesEmerged == 4 && b.longestEncounterStreak == 5,"Roster replacement erased arena history")
 
     let stale = aceCombatFixture(seed:1617), oldShooter = stale.fighters[0], staleVictim = stale.fighters[6]
     oldShooter.encountersSurvived = 3; oldShooter.enemyKills = 5; staleVictim.hitPoints = 1
@@ -68,6 +86,6 @@ func verifyAceLeadership() {
     aceCheck(posthumous.fire(from:0,to:6),"Posthumous-shot fixture could not fire")
     posthumous.destroy(fallen); posthumous.updateLasers(0.4)
     aceCheck(!victim.active && fallen.enemyKills == 6 && !fallen.isAce && fallen.tally.count == 0,"A posthumous kill promoted a dead pilot")
-    print("PASS: actual lethal shots award one pilot kill; six kills and three encounters qualify one global Ace; stable ties, higher-score handoffs, death succession, generation-safe credit, no posthumous Ace, and four initial scratch marks.")
+    print("PASS: actual lethal shots award one pilot kill; six kills and three encounters qualify one global Ace; stable ties, higher-score handoffs, death succession, generation-safe credit, no posthumous Ace, four initial scratch marks, unique historical Ace counts, and persistent encounter-survival records.")
     fflush(stdout)
 }

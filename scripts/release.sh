@@ -32,7 +32,7 @@ if [[ -z "$signing_identity" ]]; then
     signing_identity="$(security find-identity -v -p codesigning | awk -F '"' '/"Developer ID Application:/ { print $2 }')"
     [[ -n "$signing_identity" && "$signing_identity" != *$'\n'* ]] || { print -u2 'Select one Developer ID Application certificate using --identity.'; exit 1; }
 fi
-[[ -z "$(git status --porcelain)" ]] || { print -u2 'Commit all source and release changes before making a release build.'; exit 1; }
+[[ -z "$(git status --porcelain --untracked-files=no)" ]] || { print -u2 'Commit all source and release changes before making a release build.'; exit 1; }
 if $publish_release; then
     command -v gh >/dev/null || { print -u2 'Install GitHub CLI and run gh auth login first.'; exit 1; }
     gh auth status
@@ -48,8 +48,17 @@ fi
 xcrun notarytool history --keychain-profile "$notary_profile" --output-format json >/dev/null
 release_dir="$PWD/build/releases/$release_tag"
 release_app="$release_dir/Asteroid Squadron.app"
-mkdir -p "$release_dir"
-./scripts/build.sh --output "$release_app" --sign "$signing_identity"
+mkdir -p "$release_dir" "$PWD/.cache"
+# Compile only the recorded commit. Untracked design drafts cannot enter a release.
+release_source="$(mktemp -d "$PWD/.cache/release-source.XXXXXX")"
+archive_check=""
+cleanup_release() {
+    rm -rf "$release_source"
+    [[ -z "$archive_check" ]] || rm -rf "$archive_check"
+}
+trap cleanup_release EXIT
+git archive "$source_commit" | tar -x -C "$release_source"
+"$release_source/scripts/build.sh" --output "$release_app" --sign "$signing_identity"
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-pursuit > "$release_dir/flight-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-babylon > "$release_dir/arrival-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-veterans > "$release_dir/veteran-checks.log" 2>&1
@@ -94,7 +103,7 @@ xcrun stapler staple "$release_app"
 xcrun stapler validate "$release_app"
 codesign --verify --deep --strict --verbose=2 "$release_app"
 spctl --assess --type execute --verbose=2 "$release_app"
-./scripts/package.sh "$release_app" "$release_dir"
+"$release_source/scripts/package.sh" "$release_app" "$release_dir"
 release_dmg="$release_dir/Asteroid-Squadron-$app_version-arm64.dmg"
 codesign --force --timestamp --sign "$signing_identity" "$release_dmg"
 notarize_artifact "$release_dmg" "$release_dir/dmg-notarization.json"
@@ -106,7 +115,6 @@ ditto -c -k --sequesterRsrc --keepParent "$release_app" "$release_zip"
 (cd "$release_dir" && shasum -a 256 "${release_dmg:t}" "${release_zip:t}" > SHA256SUMS)
 # Verify the exact ZIP extraction, not just the app used to create it.
 archive_check="$(mktemp -d "$PWD/.cache/release-check.XXXXXX")"
-trap 'rm -rf "$archive_check"' EXIT
 ditto -x -k "$release_zip" "$archive_check"
 codesign --verify --deep --strict --verbose=2 "$archive_check/Asteroid Squadron.app"
 xcrun stapler validate "$archive_check/Asteroid Squadron.app"
@@ -133,7 +141,7 @@ report = {
     'architectures': subprocess.check_output(['xcrun','lipo',str(app / 'Contents/MacOS/AsteroidSquadron'),'-archs'],text=True).strip().split(),
     'appNotarization': {'id':app_receipt['id'],'status':app_receipt['status']},
     'dmgNotarization': {'id':dmg_receipt['id'],'status':dmg_receipt['status']},
-    'verified': ['deep strict code signature','hardened runtime and secure timestamp','app and DMG stapling','Gatekeeper app and DMG assessments','ZIP extraction signature, stapling and Gatekeeper','native pursuit and rendered jump-arrival checks','veteran top-up, ace, smooth steering and skybox checks'],
+    'verified': ['bundled app icon and matching custom DMG volume icon','deep strict code signature','hardened runtime and secure timestamp','app and DMG stapling','Gatekeeper app and DMG assessments','ZIP extraction signature, stapling and Gatekeeper','native pursuit and rendered jump-arrival checks','veteran top-up, ace, smooth steering and skybox checks'],
     'notPerformed': ['browser-download installation test on a clean Mac'],
     'sha256': {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.iterdir()) if p.name.startswith('Asteroid-Squadron-') and p.suffix in ['.zip','.dmg']}
 }
@@ -142,6 +150,6 @@ PYREPORT
 print "Notarized release ready: $release_dir"
 print "Evidence: $release_dir/RELEASE-EVIDENCE.json"
 if $publish_release; then
-    [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain)" ]] || { print -u2 'Source changed during the release. Do not publish these artifacts; rebuild from a clean commit.'; exit 1; }
+    [[ "$(git rev-parse HEAD)" == "$source_commit" && -z "$(git status --porcelain --untracked-files=no)" ]] || { print -u2 'Source changed during the release. Do not publish these artifacts; rebuild from a clean commit.'; exit 1; }
     ./scripts/publish-release.sh "$release_tag"
 fi

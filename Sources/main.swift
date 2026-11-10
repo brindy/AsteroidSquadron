@@ -390,6 +390,11 @@ final class Dogfight {
     var squadronEncounters = [0,0]
     var encountersCompleted = 0
     var acePromotions = 0
+    var acesEmerged = 0
+    var longestEncounterStreak = 0
+    // Only the latest honoured generation per roster slot is needed: bounded
+    // history prevents counting the same pilot again after losing the title.
+    var honouredAceGenerations: [Int:Int] = [:]
     var acePilot: (index: Int,generation: Int)?
     var topUpWaves = 0
     var nextArrivalTime: Float = 0
@@ -823,6 +828,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var cameraDetail: NSTextField!
     var status: NSTextField!
     var telemetry: NSTextField!
+    var aceHistory: NSTextField!
     var sector: NSTextField!
     var eventStatus: NSTextField!
     var hint: NSTextField!
@@ -838,7 +844,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.applicationIconImage = appIcon()
+        if let iconURL = Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),
+           let icon = NSImage(contentsOf:iconURL) {
+            NSApp.applicationIconImage = icon
+        }
         buildMenu()
         battle = Dogfight(seed:requestedSeed(),initialFactions:requestedFactions())
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1440,height:900)
@@ -926,31 +935,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for item in menu.items+menuView.items { if item.action != nil && item.action != #selector(NSApplication.hide(_:)) && item.action != #selector(NSApplication.terminate(_:)) { item.target = self } }
         NSApp.mainMenu = bar
     }
-    func appIcon() -> NSImage {
-        NSImage(size:NSSize(width:256,height:256),flipped:false) { rect in
-            let background = NSBezierPath(roundedRect:rect.insetBy(dx:10,dy:10),xRadius:52,yRadius:52)
-            NSGradient(starting:color(0.05,0.14,0.2),ending:color(0.005,0.02,0.04))!.draw(in:background,angle:-60)
-            color(0.3,0.8,0.88,0.25).setStroke(); background.lineWidth = 2; background.stroke()
-            color(0.65,0.82,0.86).setFill()
-            for p in [NSPoint(x:49,y:181),NSPoint(x:204,y:200),NSPoint(x:195,y:61),NSPoint(x:53,y:80)] {
-                NSBezierPath(ovalIn:NSRect(x:p.x,y:p.y,width:2,height:2)).fill()
-            }
-            let wings = NSBezierPath()
-            wings.move(to:NSPoint(x:47,y:84)); wings.line(to:NSPoint(x:207,y:145))
-            wings.move(to:NSPoint(x:47,y:145)); wings.line(to:NSPoint(x:207,y:84))
-            color(0.75,0.83,0.83).setStroke(); wings.lineWidth = 13; wings.stroke()
-            let body = NSBezierPath(); body.move(to:NSPoint(x:128,y:211)); body.line(to:NSPoint(x:116,y:77))
-            body.line(to:NSPoint(x:140,y:77)); body.close()
-            color(0.9,0.92,0.86).setFill(); body.fill()
-            color(0.75,0.12,0.055).setFill(); NSBezierPath(rect:NSRect(x:123,y:135,width:10,height:31)).fill()
-            for x: CGFloat in [49,202] {
-                for y: CGFloat in [84,144] {
-                    color(1,0.2,0.37).setFill(); NSBezierPath(ovalIn:NSRect(x:x-4,y:y-4,width:8,height:8)).fill()
-                }
-            }
-            return true
-        }
-    }
     func place(_ child: NSView, x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat, mask: NSView.AutoresizingMask = []) {
         child.frame = NSRect(x:x,y:y,width:width,height:height); child.autoresizingMask = mask
         overlay.addSubview(child)
@@ -984,6 +968,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         place(cameraTitle,x:38,y:48,width:420,height:30)
         cameraDetail = label("",size:9,color:cyan,mono:true)
         place(cameraDetail,x:39,y:27,width:430,height:17)
+        aceHistory = label("",size:10,color:color(0.8,0.66,0.4),mono:true)
+        aceHistory.toolTip = "Distinct pilots who have held the sole Ace title, and the most completed enemy encounters survived by any one pilot in this arena. Records remain after a pilot is lost; a new arena resets them."
+        place(aceHistory,x:38,y:130,width:w-76,height:17,mask:[.width])
         telemetry = label("",size:10,color:color(0.45,0.62,0.66),mono:true)
         place(telemetry,x:38,y:107,width:680,height:17)
         autoButton = button("AUTO  ON",action:#selector(toggleAutomatic),tooltip:"Action-directed cinematic camera cuts (A)")
@@ -1019,6 +1006,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if let ace = battle.fighters.first(where:{$0.active && $0.isAce}) {
                 telemetry.stringValue += "   ·   ACE \(ace.enemyKills) KILLS"
             }
+            aceHistory.stringValue = String(format:"ACES EMERGED  %02d   ·   LONGEST SURVIVAL  %d %@",battle.acesEmerged,battle.longestEncounterStreak,battle.longestEncounterStreak == 1 ? "ENCOUNTER" : "ENCOUNTERS")
             sector.stringValue = String(format:"PROCEDURAL ARENA  /  SECTOR %08llX",battle.seed & 0xFFFFFFFF)+"  /  "+(battle.planet?.biome.title ?? "")
             if let request = battle.fleetRequests.min(by:{$0.countdown<$1.countdown}) {
                 eventStatus.stringValue = String(format:"%@ INBOUND / ETA %02d SEC",battle.sideFactions[request.side].title,max(0,Int(ceil(request.countdown))))
@@ -1116,7 +1104,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. Only the highest-kill eligible living pilot becomes Ace: at least three survived encounters and six enemy kills. The gold scratch tally starts at four. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners."
+        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. Only the highest-kill eligible living pilot becomes Ace: at least three survived encounters and six enemy kills. The gold scratch tally starts at four. The HUD records distinct Ace pilots and the longest completed-encounter survival streak in this arena, even after pilots are lost. R resets these arena records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }
@@ -1142,7 +1130,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard CommandLine.arguments.contains("--smoke-test"), let battle, let window else { return }
         let path = CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png"
         let output = URL(fileURLWithPath:path)
-        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"pursuitBreaks":battle.pursuitBreaks,"aces":battle.fighters.filter(\.isAce).filter(\.active).count,"aceKills":battle.fighters.first(where:{$0.isAce})?.enemyKills ?? 0,"encounters":battle.encountersCompleted,"topUpWaves":battle.topUpWaves,"starfuryPivots":battle.starfuryPivots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
+        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"pursuitBreaks":battle.pursuitBreaks,"aces":battle.fighters.filter(\.isAce).filter(\.active).count,"acesEmerged":battle.acesEmerged,"longestEncounterStreak":battle.longestEncounterStreak,"aceKills":battle.fighters.first(where:{$0.isAce})?.enemyKills ?? 0,"encounters":battle.encountersCompleted,"topUpWaves":battle.topUpWaves,"starfuryPivots":battle.starfuryPivots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }

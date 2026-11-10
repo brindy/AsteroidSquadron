@@ -24,7 +24,7 @@ Apple's [notarization guide](https://developer.apple.com/documentation/security/
 ## Create and publish a release
 
 1. Update `VERSION`, increment `BUILD_NUMBER`, and add `releases/v<VERSION>.md`.
-2. Review and commit all changes. The release command rejects a dirty checkout.
+2. Review and commit all changes. The release command rejects changes to tracked files and builds an isolated snapshot of the committed source. Untracked design drafts are left alone and excluded from the build.
 3. Run:
 
    ```sh
@@ -63,3 +63,9 @@ The publisher verifies the recorded SHA-256 values, Apple acceptance receipts, a
 All building, signing, notarization, verification and packaging run locally. There are no GitHub Actions workflows or cloud signing secrets. GitHub hosts the source repository and published releases only. The local release command runs native flight checks, rendered GPU arrival checks, and the veteran/skybox checks before notarization. Intel/Rosetta builds and checks are not part of the release process.
 
 Keep build products, `.p12` certificates, `.p8` keys, passwords and notarization receipts out of Git. The `.gitignore` covers the standard paths and credential extensions. Never commit an exported private key to set up signing.
+
+## App and disk image icons
+
+`Resources/AppIcon.png` is the original selected artwork. `scripts/build-icon.sh` generates all standard and Retina ICNS sizes during every build, before code signing. `CFBundleIconFile` registers the result with Finder, and the running app loads that same bundled icon for the Dock. The launcher rebuilds when the artwork or icon helper changes.
+
+The packager includes `.VolumeIcon.icns` and sets the mounted volume's custom-icon flag before creating the compressed DMG. The app inside the image retains its signed bundle icon. This embeds the artwork in downloadable files without depending on a local Finder resource fork. Do not alter icons in an already signed or notarized bundle; increment the version and make a new release.
