@@ -49,7 +49,13 @@ private func shadowSpine(_ points: [V3], radius: Float, mat: SCNMaterial) -> SCN
     var vertices = [SCNVector3](), normals = [SCNVector3](), indices = [Int32]()
     func curve(_ t: Float) -> V3 {
         let u = 1-t
-        return points[0]*u*u*u+points[1]*3*u*u*t+points[2]*3*u*t*t+points[3]*t*t*t
+        // Keep vector overload resolution small on the older Swift compilers
+        // used by hosted runners. Preserve the original arithmetic order.
+        let a: V3 = points[0]*u*u*u
+        let b: V3 = points[1]*3*u*u*t
+        let c: V3 = points[2]*3*u*t*t
+        let d: V3 = points[3]*t*t*t
+        return a+b+c+d
     }
     for i in 0...rings {
         let t = Float(i)/Float(rings), p = curve(t)

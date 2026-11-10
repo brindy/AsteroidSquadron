@@ -35,6 +35,10 @@ jobs:
           for script in scripts/*.sh 'Start Dogfight.command'; do
             zsh -n "$script"
           done
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          swift --version
       - name: Build Apple Silicon and Intel
         run: ./scripts/build.sh --universal
       - name: Check pursuit and combat flight
