@@ -22,7 +22,7 @@ print "Compiling Apple Silicon ($build_arch)"
 build_slice="$build_temp/AsteroidSquadron"
 xcrun swiftc -O -target "$build_arch-apple-macosx13.0" -module-cache-path "$PWD/.cache/clang" Sources/*.swift -o "$build_slice" -framework AppKit -framework SceneKit
 install -m 755 "$build_slice" "$APP/Contents/MacOS/AsteroidSquadron"
-./scripts/build-icon.sh "$APP/Contents/Resources/AppIcon.icns"
+./scripts/build-icon.sh "$APP/Contents/Resources" "$build_temp/icon-info.plist"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -31,7 +31,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleDisplayName</key><string>Asteroid Squadron</string>
 <key>CFBundleIdentifier</key><string>dev.brindy.asteroid-squadron</string>
 <key>CFBundleExecutable</key><string>AsteroidSquadron</string>
-<key>CFBundleIconFile</key><string>AppIcon.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>$build_number</string>
 <key>CFBundleShortVersionString</key><string>$app_version</string>
@@ -43,6 +42,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>NSHumanReadableCopyright</key><string>Unofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners.</string>
 </dict></plist>
 PLIST
+/usr/libexec/PlistBuddy -c "Merge '$build_temp/icon-info.plist'" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 if [[ "$signing_identity" == "-" ]]; then
     codesign --force --sign - "$APP"

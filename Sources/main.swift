@@ -844,10 +844,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        if let iconURL = Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),
-           let icon = NSImage(contentsOf:iconURL) {
-            NSApp.applicationIconImage = icon
-        }
+        // Use the compiled bundle icon everywhere, including the Dock. A raw
+        // NSImage override bypasses native icon rendering and hides bundle bugs.
         buildMenu()
         battle = Dogfight(seed:requestedSeed(),initialFactions:requestedFactions())
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1440,height:900)

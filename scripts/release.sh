@@ -132,6 +132,7 @@ entitlements = subprocess.run(['codesign','--display','--entitlements','-',str(a
 report = {
     'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'],
     'bundleID': info['CFBundleIdentifier'], 'sourceCommit': revision,
+    'icon': {'name':info.get('CFBundleIconName'),'file':info.get('CFBundleIconFile'),'nativeCatalog':(app/'Contents/Resources/Assets.car').is_file()},
     'team': fields.get('TeamIdentifier'),
     'entitlements': plistlib.loads(entitlements) if entitlements.strip() else {},
     'embeddedFrameworks': [str(p.relative_to(app)) for p in app.glob('Contents/Frameworks/*')],

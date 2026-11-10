@@ -25,7 +25,9 @@ trap cleanup_package EXIT
 mkdir "$package_stage" "$package_mount"
 package_icon="$package_app/Contents/Resources/AppIcon.icns"
 [[ -s "$package_icon" ]] || { print -u2 'App icon is missing; rebuild the app before packaging.'; exit 1; }
-[[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIconFile' "$package_app/Contents/Info.plist")" == AppIcon.icns ]] || { print -u2 'App icon is not registered in Info.plist.'; exit 1; }
+package_icon_file="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIconFile' "$package_app/Contents/Info.plist")"
+[[ "$package_icon_file" == AppIcon || "$package_icon_file" == AppIcon.icns ]] || { print -u2 'App icon is not registered in Info.plist.'; exit 1; }
+[[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIconName' "$package_app/Contents/Info.plist")" == AppIcon && -s "$package_app/Contents/Resources/Assets.car" ]] || { print -u2 'Native icon catalog is missing; rebuild the app before packaging.'; exit 1; }
 cp "$package_icon" "$package_stage/.VolumeIcon.icns"
 ditto "$package_app" "$package_stage/Asteroid Squadron.app"
 ln -s /Applications "$package_stage/Applications"

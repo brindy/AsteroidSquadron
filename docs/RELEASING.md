@@ -6,7 +6,7 @@ Signing and notarization run on the maintainer's Mac. The Developer ID private k
 
 ## One-time setup
 
-1. On an Apple Silicon Mac, install Xcode Command Line Tools and [GitHub CLI](https://cli.github.com/).
+1. On an Apple Silicon Mac, install full Xcode 26 or newer (including its command-line tools) and [GitHub CLI](https://cli.github.com/).
 2. Authenticate GitHub CLI with `gh auth login -h github.com`. Git push also needs access to `origin`.
 3. Install a **Developer ID Application** certificate with its private key. Check availability using `security find-identity -v -p codesigning`. Apple Development certificates and ad hoc signatures cannot be used for a notarized public release.
 4. Store Apple notarization credentials in Keychain:
@@ -66,6 +66,8 @@ Keep build products, `.p12` certificates, `.p8` keys, passwords and notarization
 
 ## App and disk image icons
 
-`Resources/AppIcon.png` is the original selected artwork. `scripts/build-icon.sh` generates all standard and Retina ICNS sizes during every build, before code signing. Its native `RenderAppIcon.swift` helper places the artwork into a centered 824px footprint on a transparent 1024px canvas (scaled for each representation), so the traditional ICNS icon has suitable Dock spacing. The original artwork remains unchanged. This compatibility layout supports macOS 13+; it is separate from Apple’s newer Icon Composer workflow, where system masking and layout are applied during compilation. `CFBundleIconFile` registers the result with Finder, and the running app loads that same bundled icon for the Dock. The launcher rebuilds when the artwork or icon helper changes.
+`Resources/AppIcon.png` is the original selected artwork. `Resources/IconComposition.json` describes an opaque dark backing with the original artwork and no added glass effects. `scripts/build-icon.sh` assembles a temporary native `.icon` package, resizes the artwork to 1024px without manually adding margins, then uses Xcode's `actool` to compile `Assets.car`, `AppIcon.icns` and the required Info.plist icon keys. The build merges those keys before signing. Full Xcode 26 or newer is required to build; the app still supports macOS 13 or newer.
+
+The system handles shape, spacing and rendering in Finder, Spotlight, the About panel and the Dock. There is no runtime `NSApplication` icon override. A manually padded legacy PNG can look correct in the Dock but acquire a pale fallback plate in Finder/Spotlight; use the native composition to avoid that mismatch. The compiler also emits every standard and Retina ICNS representation for compatibility and the DMG. The launcher rebuilds when either icon source or the helper changes.
 
 The packager includes `.VolumeIcon.icns` and sets the mounted volume's custom-icon flag before creating the compressed DMG. The app inside the image retains its signed bundle icon. This embeds the artwork in downloadable files without depending on a local Finder resource fork. Do not alter icons in an already signed or notarized bundle; increment the version and make a new release.

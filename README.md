@@ -53,7 +53,7 @@ Maintainers: see [the release guide](docs/RELEASING.md) for Keychain setup and t
 
 ## Run
 
-Double-click **Start Dogfight.command**, or open **build/Asteroid Squadron.app** after building. The launcher builds the app if needed; building requires Xcode Command Line Tools. The built app requires an Apple Silicon Mac running macOS 13 or newer. Builds and release packages contain only the arm64 architecture. Version numbers come from `VERSION` and `BUILD_NUMBER`.
+Double-click **Start Dogfight.command**, or open **build/Asteroid Squadron.app** after building. The launcher builds the app if needed; building requires full Xcode 26 or newer, including its command-line tools. The built app requires an Apple Silicon Mac running macOS 13 or newer. Builds and release packages contain only the arm64 architecture. Version numbers come from `VERSION` and `BUILD_NUMBER`.
 
 ```sh
 ./scripts/build.sh
