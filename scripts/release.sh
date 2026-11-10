@@ -14,6 +14,7 @@ while (( $# )); do
     esac
 done
 [[ -n "$notary_profile" ]] || { print -u2 'A notarization Keychain profile is required. Run ./scripts/setup-notarization.sh first.'; exit 1; }
+[[ "$(uname -m)" == arm64 ]] || { print -u2 'Local release validation requires an Apple Silicon Mac.'; exit 1; }
 app_version="$(< VERSION)"
 release_tag="v$app_version"
 source_commit="$(git rev-parse HEAD)"
@@ -48,13 +49,10 @@ xcrun notarytool history --keychain-profile "$notary_profile" --output-format js
 release_dir="$PWD/build/releases/$release_tag"
 release_app="$release_dir/Asteroid Squadron.app"
 mkdir -p "$release_dir"
-./scripts/build.sh --universal --output "$release_app" --sign "$signing_identity"
+./scripts/build.sh --output "$release_app" --sign "$signing_identity"
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-pursuit > "$release_dir/flight-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-babylon > "$release_dir/arrival-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-veterans > "$release_dir/veteran-checks.log" 2>&1
-if [[ "$(uname -m)" == arm64 ]] && pkgutil --pkg-info com.apple.pkg.RosettaUpdateAuto >/dev/null 2>&1; then
-    /usr/bin/arch -x86_64 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-pursuit > "$release_dir/intel-rosetta-flight-checks.log" 2>&1
-fi
 signature_info="$(codesign --display --verbose=4 "$release_app" 2>&1)"
 print -r -- "$signature_info" | grep -q '^Authority=Developer ID Application:' || { print -u2 'App is not signed with Developer ID Application.'; exit 1; }
 print -r -- "$signature_info" | grep -q 'flags=.*runtime' || { print -u2 'Hardened runtime is missing.'; exit 1; }
@@ -97,13 +95,13 @@ xcrun stapler validate "$release_app"
 codesign --verify --deep --strict --verbose=2 "$release_app"
 spctl --assess --type execute --verbose=2 "$release_app"
 ./scripts/package.sh "$release_app" "$release_dir"
-release_dmg="$release_dir/Asteroid-Squadron-$app_version-universal.dmg"
+release_dmg="$release_dir/Asteroid-Squadron-$app_version-arm64.dmg"
 codesign --force --timestamp --sign "$signing_identity" "$release_dmg"
 notarize_artifact "$release_dmg" "$release_dir/dmg-notarization.json"
 xcrun stapler staple "$release_dmg"
 xcrun stapler validate "$release_dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$release_dmg"
-release_zip="$release_dir/Asteroid-Squadron-$app_version-universal.zip"
+release_zip="$release_dir/Asteroid-Squadron-$app_version-arm64.zip"
 ditto -c -k --sequesterRsrc --keepParent "$release_app" "$release_zip"
 (cd "$release_dir" && shasum -a 256 "${release_dmg:t}" "${release_zip:t}" > SHA256SUMS)
 # Verify the exact ZIP extraction, not just the app used to create it.
@@ -136,7 +134,6 @@ report = {
     'appNotarization': {'id':app_receipt['id'],'status':app_receipt['status']},
     'dmgNotarization': {'id':dmg_receipt['id'],'status':dmg_receipt['status']},
     'verified': ['deep strict code signature','hardened runtime and secure timestamp','app and DMG stapling','Gatekeeper app and DMG assessments','ZIP extraction signature, stapling and Gatekeeper','native pursuit and rendered jump-arrival checks','veteran top-up, ace, smooth steering and skybox checks'],
-    'intelRosettaFlightChecks': 'passed' if (folder / 'intel-rosetta-flight-checks.log').exists() else 'not run (Rosetta unavailable or host is Intel)',
     'notPerformed': ['browser-download installation test on a clean Mac'],
     'sha256': {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.iterdir()) if p.name.startswith('Asteroid-Squadron-') and p.suffix in ['.zip','.dmg']}
 }

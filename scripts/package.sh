@@ -8,9 +8,7 @@ package_output="${2:A}"
 [[ -x "$package_app/Contents/MacOS/AsteroidSquadron" ]] || { print -u2 "App executable is missing"; exit 1; }
 package_version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$package_app/Contents/Info.plist")"
 [[ "$package_version" =~ '^[0-9]+\.[0-9]+(\.[0-9]+)?$' ]] || { print -u2 "Invalid app version"; exit 1; }
-for package_arch in arm64 x86_64; do
-    xcrun lipo "$package_app/Contents/MacOS/AsteroidSquadron" -verify_arch "$package_arch"
-done
+[[ "$(xcrun lipo "$package_app/Contents/MacOS/AsteroidSquadron" -archs)" == arm64 ]] || { print -u2 'Release packages must be Apple Silicon only.'; exit 1; }
 codesign --verify --deep --strict --verbose=2 "$package_app"
 mkdir -p "$package_output" "$PWD/.cache"
 package_stage="$(mktemp -d "$PWD/.cache/dmg.XXXXXX")"
@@ -21,7 +19,7 @@ cat > "$package_stage/Install Asteroid Squadron.txt" <<'INSTALL'
 ASTEROID SQUADRON
 
 Drag Asteroid Squadron.app onto Applications, then open it from Applications.
-Requires macOS 13 or newer. Supports Apple Silicon and Intel Macs.
+Requires an Apple Silicon Mac running macOS 13 or newer.
 
 The app keeps your display and computer awake while it runs, including when
 paused or minimized. Quit with Command-Q or close its window to release this.
@@ -36,7 +34,7 @@ Updates and source: https://github.com/brindy/AsteroidSquadron
 Unofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 names
 and designs belong to their respective owners.
 INSTALL
-package_dmg="$package_output/Asteroid-Squadron-$package_version-universal.dmg"
+package_dmg="$package_output/Asteroid-Squadron-$package_version-arm64.dmg"
 hdiutil create -volname 'Asteroid Squadron' -srcfolder "$package_stage" -fs HFS+ -format UDZO -ov "$package_dmg"
 hdiutil verify "$package_dmg"
 print "Packaged: $package_dmg"

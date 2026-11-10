@@ -2,19 +2,14 @@
 set -euo pipefail
 cd "${0:A:h:h}"
 APP="$PWD/build/Asteroid Squadron.app"
-build_archs=("$(uname -m)")
+build_arch="arm64"
 signing_identity="-"
 while (( $# )); do
     case "$1" in
-        --universal) build_archs=(arm64 x86_64); shift ;;
-        --arch) build_archs=("${2:?Missing architecture}"); shift 2 ;;
         --output) APP="${2:?Missing app path}"; shift 2 ;;
         --sign) signing_identity="${2:?Missing signing identity}"; shift 2 ;;
-        *) print -u2 "Usage: $0 [--universal | --arch arm64|x86_64] [--output app-path] [--sign identity]"; exit 1 ;;
+        *) print -u2 "Usage: $0 [--output app-path] [--sign identity]"; exit 1 ;;
     esac
-done
-for build_arch in "${build_archs[@]}"; do
-    [[ "$build_arch" == arm64 || "$build_arch" == x86_64 ]] || { print -u2 "Unsupported architecture: $build_arch"; exit 1; }
 done
 APP="${APP:A}"
 app_version="$(< VERSION)"
@@ -23,15 +18,10 @@ build_number="$(< BUILD_NUMBER)"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$PWD/.cache/clang"
 build_temp="$(mktemp -d "$PWD/.cache/build.XXXXXX")"
 trap 'rm -rf "$build_temp"' EXIT
-build_slices=()
-for build_arch in "${build_archs[@]}"; do
-    print "Compiling $build_arch"
-    build_slice="$build_temp/AsteroidSquadron-$build_arch"
-    xcrun swiftc -O -target "$build_arch-apple-macosx13.0" -module-cache-path "$PWD/.cache/clang" Sources/*.swift -o "$build_slice" -framework AppKit -framework SceneKit
-    build_slices+=("$build_slice")
-done
-xcrun lipo -create "${build_slices[@]}" -output "$APP/Contents/MacOS/AsteroidSquadron"
-chmod 755 "$APP/Contents/MacOS/AsteroidSquadron"
+print "Compiling Apple Silicon ($build_arch)"
+build_slice="$build_temp/AsteroidSquadron"
+xcrun swiftc -O -target "$build_arch-apple-macosx13.0" -module-cache-path "$PWD/.cache/clang" Sources/*.swift -o "$build_slice" -framework AppKit -framework SceneKit
+install -m 755 "$build_slice" "$APP/Contents/MacOS/AsteroidSquadron"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -58,7 +48,5 @@ else
     codesign --force --options runtime --timestamp --sign "$signing_identity" "$APP"
 fi
 codesign --verify --deep --strict --verbose=2 "$APP"
-for build_arch in "${build_archs[@]}"; do
-    xcrun lipo "$APP/Contents/MacOS/AsteroidSquadron" -verify_arch "$build_arch"
-done
+[[ "$(xcrun lipo "$APP/Contents/MacOS/AsteroidSquadron" -archs)" == arm64 ]] || { print -u2 'Expected an Apple Silicon-only executable.'; exit 1; }
 print "Built: $APP"

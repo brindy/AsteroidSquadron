@@ -479,6 +479,13 @@ func verifySimulation() {
                 maxEffects = max(maxEffects,battle.effects.count)
                 maxBlasts = max(maxBlasts,battle.blasts.count)
                 check(battle.activeCount+battle.arrivingCount<=12,"Unbounded fleet")
+                let aces = battle.fighters.filter(\.isAce)
+                check(aces.count<=1,"More than one global Ace")
+                if let ace = aces.first {
+                    check(ace.aceEligible && ace.tally.count == ace.encountersSurvived+1,"Ineligible Ace or incorrect scratch tally")
+                    check(!battle.fighters.contains(where:{$0.aceEligible && $0.enemyKills>ace.enemyKills}),"Ace does not lead the eligible kill counts")
+                }
+                check(battle.fighters.filter{$0.tally.count>0}.count == aces.count,"A non-Ace displays scratch marks")
                 check(battle.sideFactions[0] != battle.sideFactions[1],"Opposing sides selected the same faction")
                 for f in battle.fighters {
                     check(f.faction == battle.sideFactions[f.side],"Roster mixes faction models")

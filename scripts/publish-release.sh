@@ -5,14 +5,24 @@ cd "${0:A:h:h}"
 check_only=false
 if [[ "${1:-}" == --check ]]; then check_only=true; shift; fi
 release_tag="${1:-v$(< VERSION)}"
-[[ "$release_tag" =~ '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' ]] || { print -u2 'Expected a version tag such as v1.14.'; exit 1; }
+[[ "$release_tag" =~ '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' ]] || { print -u2 'Expected a version tag such as v1.15.'; exit 1; }
 release_version="${release_tag#v}"
 release_dir="$PWD/build/releases/$release_tag"
 release_app="$release_dir/Asteroid Squadron.app"
-release_dmg="$release_dir/Asteroid-Squadron-$release_version-universal.dmg"
-release_zip="$release_dir/Asteroid-Squadron-$release_version-universal.zip"
+[[ -f "$release_dir/RELEASE-EVIDENCE.json" ]] || { print -u2 'No completed local release exists for this version. Build it with scripts/release.sh first.'; exit 1; }
+# Keep old approved archives readable without ever rebuilding or re-signing them.
+artifact_label="$(python3 - "$release_dir/RELEASE-EVIDENCE.json" <<'PYARCH'
+import json, sys
+arches = set(json.load(open(sys.argv[1]))['architectures'])
+if arches == {'arm64'}: print('arm64')
+elif arches == {'arm64','x86_64'}: print('universal')
+else: raise SystemExit('Unsupported artifact architecture metadata')
+PYARCH
+)"
+release_dmg="$release_dir/Asteroid-Squadron-$release_version-$artifact_label.dmg"
+release_zip="$release_dir/Asteroid-Squadron-$release_version-$artifact_label.zip"
 release_notes="$PWD/releases/$release_tag.md"
-source_commit="$(python3 - "$release_dir" "$release_version" <<'PY'
+source_commit="$(python3 - "$release_dir" "$release_version" "$artifact_label" <<'PY'
 import hashlib, json, pathlib, plistlib, re, subprocess, sys
 folder, version = pathlib.Path(sys.argv[1]), sys.argv[2]
 report = json.loads((folder/'RELEASE-EVIDENCE.json').read_text())
@@ -21,12 +31,14 @@ assert re.fullmatch('[0-9a-f]{40}', report['sourceCommit']), 'Invalid source com
 for kind in ['app','dmg']:
     assert report[kind+'Notarization']['status'] == 'Accepted', 'Notarization was not accepted'
 for ext in ['zip','dmg']:
-    name = f'Asteroid-Squadron-{version}-universal.{ext}'
+    name = f'Asteroid-Squadron-{version}-{sys.argv[3]}.{ext}'
     assert hashlib.sha256((folder/name).read_bytes()).hexdigest() == report['sha256'][name], 'Artifact checksum mismatch'
 app = folder/'Asteroid Squadron.app'
 info = plistlib.loads((app/'Contents/Info.plist').read_bytes())
 assert info['CFBundleIdentifier'] == 'dev.brindy.asteroid-squadron', 'Bundle ID mismatch'
 assert info['CFBundleShortVersionString'] == version, 'Bundle version mismatch'
+actual = subprocess.check_output(['xcrun','lipo',str(app/'Contents/MacOS/AsteroidSquadron'),'-archs'],text=True).split()
+assert set(actual) == set(report['architectures']), 'Executable architecture mismatch'
 source_version = subprocess.check_output(['git','show',report['sourceCommit']+':VERSION'],text=True).strip()
 assert source_version == version, 'Source commit version mismatch'
 print(report['sourceCommit'])

@@ -63,7 +63,7 @@ extension Dogfight {
             bolt.addChildNode(box(V3(0.1,0.1,length),projectileMaterials[f.faction]!,V3(0,0,-length/2)))
             bolt.simdOrientation = simd_quatf(from:V3(0,0,-1),to:forward)
             scene.rootNode.addChildNode(bolt)
-            lasers.append(Laser(node:bolt,position:origin,velocity:forward*f.faction.projectileSpeed+f.velocity,life:1.8,sourceSide:f.side,generations:generations,launchOrigin:origin,launchForward:forward,inheritedVelocity:f.velocity,length:length))
+            lasers.append(Laser(node:bolt,position:origin,velocity:forward*f.faction.projectileSpeed+f.velocity,life:1.8,sourceSide:f.side,generations:generations,launchOrigin:origin,launchForward:forward,inheritedVelocity:f.velocity,length:length,sourceIndex:index))
         }
         shots += barrels.count; f.gunCycle += 1
         return true
@@ -93,7 +93,10 @@ extension Dogfight {
                 if let victim {
                     weaponHits += 1
                     victim.hitPoints -= 1
-                    if victim.hitPoints<=0 { destroy(victim) }
+                    if victim.hitPoints<=0 {
+                        creditWeaponKill(from:lasers[i],victim:victim)
+                        destroy(victim)
+                    }
                 }
             }
             if fraction<=1 || lasers[i].life<=0 { lasers[i].node.removeFromParentNode(); lasers.remove(at:i) }
