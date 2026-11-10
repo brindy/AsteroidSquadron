@@ -39,7 +39,7 @@ Publication pushes the source commit, creates and pushes an annotated `v<VERSION
 
 Apple processing can take a while. If a submission times out, use its ID in the JSON receipt with `xcrun notarytool info`, `log`, or `wait` and the same `--keychain-profile`. The service keeps processing after the local timeout. Do not publish a pending or rejected submission, or repeatedly resubmit it. If publication fails after the notarized artifacts and tag were created, the artifacts remain locally; upload those existing validated files with `gh release create` (or `gh release upload` for an existing draft) rather than re-notarizing them.
 
-## Development builds and CI
+## Local development builds
 
 ```sh
 ./scripts/build.sh                                  # Native architecture, ad hoc signature
@@ -48,8 +48,8 @@ Apple processing can take a while. If a submission times out, use its ID in the 
 ./scripts/package.sh 'build/test/Asteroid Squadron.app' build/package-test
 ```
 
-`package.sh` only creates and verifies a disk image. It does **not** notarize it. Local ad hoc builds and GitHub Actions development artifacts are for testing, not the signed public download.
+`package.sh` only creates and verifies a disk image. It does **not** notarize it. Local ad hoc builds are for testing, not the signed public download.
 
-The GitHub Actions workflow runs on pushes to `main`, pull requests and manual dispatch. It checks shell syntax and builds the Universal binary on Apple Silicon and Intel runners, runs the pursuit/flight regression natively on each architecture, and retains a clearly labelled development ZIP for seven days. It has read-only repository permissions and uses no signing credentials. Full rendered GPU checks run locally before public releases because hosted runners may lack a suitable GPU.
+All building, signing, notarization, verification and packaging run locally. There are no GitHub Actions workflows or cloud signing secrets. GitHub hosts the source repository and published releases only. The local release command runs native flight checks and rendered GPU arrival checks before notarization.
 
 Keep build products, `.p12` certificates, `.p8` keys, passwords and notarization receipts out of Git. The `.gitignore` covers the standard paths and credential extensions. Never commit an exported private key to set up signing.

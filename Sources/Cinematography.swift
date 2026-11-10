@@ -250,7 +250,9 @@ final class CinematicDirector {
         let pull = linear*linear*(3-2*linear)
         let focus = mix(heroPosition,group,pull)
         let focusVelocity = mix(hero.active ? hero.velocity : .zero,groupVelocity,pull)
-        let offset = ship.faction == .shadow ? ship.forward*30-right*70-up*18 : ship.forward*58-right*38-up*18
+        let forwardOffset: Float = ship.faction == .shadow ? 30 : 58
+        let lateralOffset: Float = ship.faction == .shadow ? 70 : 38
+        let offset: V3 = ship.forward*forwardOffset-right*lateralOffset-up*18
         let outward = unit(offset)
         let screenRight = unit(simd_cross(-outward,V3(0,1,0)))
         let screenUp = unit(simd_cross(screenRight,-outward))
@@ -278,7 +280,9 @@ final class CinematicDirector {
         }
         carrierDollyDistance = max(carrierDollyDistance,fittedDistance)
         let distance = simd_length(offset)+(carrierDollyDistance-simd_length(offset))*pull
-        return (focus+focusVelocity*(2/7)+outward*distance,focus+up*2)
+        let position: V3 = focus+focusVelocity*(Float(2)/7)+outward*distance
+        let look: V3 = focus+up*2
+        return (position,look)
     }
     func update(_ dt: Float, in b: Dogfight) {
         eventAge += dt; shake *= exp(-dt*8)

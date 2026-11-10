@@ -41,7 +41,7 @@ The gas clouds use ray marching through three-dimensional procedural noise insid
 
 ## Download
 
-See [GitHub Releases](https://github.com/brindy/AsteroidSquadron/releases) for published Mac builds. Use the Universal DMG, drag **Asteroid Squadron** into **Applications**, then launch it. Release downloads support Apple Silicon and Intel Macs on macOS 13 or newer. The release script signs with Developer ID, notarizes and staples the app and DMG, and publishes a ZIP alternative and SHA-256 checksums. GitHub Actions development artifacts are separate and are not notarized.
+See [GitHub Releases](https://github.com/brindy/AsteroidSquadron/releases) for published Mac builds. Use the Universal DMG, drag **Asteroid Squadron** into **Applications**, then launch it. Release downloads support Apple Silicon and Intel Macs on macOS 13 or newer. The release script signs with Developer ID, notarizes and staples the app and DMG, and publishes a ZIP alternative and SHA-256 checksums. Building, signing and notarization run locally; GitHub hosts the source and releases.
 
 Maintainers: see [the release guide](docs/RELEASING.md) for Keychain setup and the one-command release workflow.
 
