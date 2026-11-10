@@ -259,7 +259,7 @@ private func verifyShipTraffic() {
     fatal.resolveShipCollisions(from:start,wasActive:active,dt:0.5)
     check(!a.active && !c.active && fatal.shipCollisionLosses == 2,"High-speed swept collision failed to destroy both ships")
     check(fatal.blasts.count == 2,"Fatal collision did not create explosions")
-    print("PASS: four-faction friendly head-on avoidance, overtaking separation, friendly/enemy collision damage, contact persistence, momentum, and fatal swept crossings.")
+    print("PASS: six-faction friendly head-on avoidance, overtaking separation, friendly/enemy collision damage, contact persistence, momentum, and fatal swept crossings.")
 }
 
 private func verifyWeaponsAndMotion() {
@@ -335,12 +335,12 @@ private func verifyWeaponsAndMotion() {
     f.position = V3(0,250,10); f.velocity = V3(0,0,-60)
     a.tryAsteroidStrike(f,from:V3(0,250,50),dt:1.0/60)
     check(f.spin != nil && f.velocity.z>0 && f.position.z>=15+f.faction.collisionRadius,"Swept asteroid impact did not reflect velocity at contact")
-    print("PASS: all four models fire forwards from paired muzzles; physical hits and evasion; bounded, identical 30/60 fps flight; swept asteroid collision.")
+    print("PASS: all six models fire forwards from paired muzzles; physical hits and evasion; bounded, identical 30/60 fps flight; swept asteroid collision.")
 }
 
 private func verifyContinuousDeployments() {
   for aspect: Float in [1.0,1.6,2.0] {
-    for faction in [Faction.empire,.colonial,.cylon] {
+    for faction in [Faction.empire,.colonial,.cylon,.shadow] {
         let b = Dogfight(seed:710,initialFactions:[faction,.rebel],initialArrivals:false)
         b.viewportAspect = aspect
         b.rocks.removeAll()
@@ -350,7 +350,7 @@ private func verifyContinuousDeployments() {
         check(ship.scale == 6,"Capital ship lost its epic scale")
         check(ship.departureAge-ship.lastLaunchAge<=0.2,"Capital ship lingers after last launch")
         var cuts: Int?, departed = false, lastLaunch: Float?, closeDistance: Float?, wideDistance: Float?, handoffChecked = false
-        for _ in 0..<420 {
+        for _ in 0..<660 {
             for f in b.fighters { f.cooldown = 10000 }
             b.update(dt:1.0/60)
             let age = b.time-ship.start
@@ -404,7 +404,7 @@ private func verifyContinuousDeployments() {
         check(handoffChecked && b.director.handoffCuts == 1,"Capital departure did not hand off to an existing fighter")
     }
   }
-    print("PASS: all three capital ships, three window shapes: close launch, continuous pullback framing the full capital and all fighters, and group tracking through departure.")
+    print("PASS: all four capital ships, three window shapes: close launch, continuous pullback framing the full capital and all fighters, and group tracking through departure.")
 }
 
 private func handoffFixture() -> Dogfight {
@@ -442,6 +442,7 @@ private func verifyArrivalHandoff() {
 }
 
 func verifySimulation() {
+    verifyBabylon()
     verifyArrivalHandoff()
     verifyPursuitLimits()
     verifyCriticalDirector()
@@ -529,7 +530,7 @@ func verifySimulation() {
             check(battle.spinOuts>0 && battle.recoveries+battle.asteroidLosses>0,"No asteroid incidents")
             check(smallestShipClearance>5,"Fighter intersects asteroid in seed \(seed): clearance \(smallestShipClearance)")
             check(smallestCameraClearance>0,"Camera enters asteroid in seed \(seed): clearance \(smallestCameraClearance)")
-            print("PASS seed \(seed): 10 minutes, \(Int(wideShare*100))% wide combat, \(battle.director.attackCuts)/\(battle.director.explosionCuts)/\(battle.director.dangerCuts) attack/explosion/danger highlights; \(battle.replacementCount) faction replacements; \(battle.destroyed) losses; \(battle.shipCollisions) ship collisions; min normal ship/camera clearance \(smallestShipClearance)/\(smallestCameraClearance); max effects \(maxLasers)/\(maxSparks)/\(maxEffects)/\(maxBlasts).")
+            print("PASS seed \(seed): 10 minutes, \(Int(wideShare*100))% wide combat, \(battle.director.attackCuts)/\(battle.director.explosionCuts)/\(battle.director.dangerCuts) attack/explosion/danger highlights; \(battle.replacementCount) faction replacements; \(battle.destroyed) losses; \(battle.shipCollisions) ship collisions; \(battle.starfuryPivots) Starfury pivots; min normal ship/camera clearance \(smallestShipClearance)/\(smallestCameraClearance); max effects \(maxLasers)/\(maxSparks)/\(maxEffects)/\(maxBlasts).")
             fflush(stdout)
         }
     }
@@ -573,8 +574,8 @@ private func verifyFactionLifecycle() {
         check(b.sideCount(side) == 6,"Replacement squadron did not fully deploy")
         check(b.carriers.isEmpty,"Replacement carrier failed to depart")
     }
-    check(b.replacementCount == 12 && b.encounteredFactions.count == 4,"Faction selection did not cover the four-faction catalog")
-    print("PASS: no partial refills; twelve distinct-side replacements across all four factions; stale projectiles cannot damage new generations.")
+    check(b.replacementCount == 12 && b.encounteredFactions.count == Faction.allCases.count,"Faction selection did not cover the six-faction catalog")
+    print("PASS: no partial refills; twelve distinct-side replacements across all six factions; stale projectiles cannot damage new generations.")
 }
 
 private func verifyBlinkCarriers() {

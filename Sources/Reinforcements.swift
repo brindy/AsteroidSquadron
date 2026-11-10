@@ -65,7 +65,7 @@ extension Dogfight {
         guard squadron.allSatisfy({fighters[$0].state == .destroyed}) else { return }
         let faction = sideFactions[side]
         let start = max(time,nextArrivalTime)
-        nextArrivalTime = start+6.5
+        nextArrivalTime = start+(faction == .shadow ? 7.2 : 6.5)
         waveNumber += 1
         if faction == .rebel {
             // The complete V formation gets one collision-free entry corridor.
@@ -98,8 +98,9 @@ extension Dogfight {
             var position = V3.zero
             for _ in 0..<80 {
                 let a = rng.range(0,tau)
-                position = V3(sin(a)*3300,900,cos(a)*3300)
-                let radius: Float = (faction == .cylon ? 158 : 130)*6
+                let distance: Float = faction == .earth ? 1450 : 3300
+                position = V3(sin(a)*distance,faction == .earth ? 600 : 900,cos(a)*distance)
+                let radius: Float = (faction == .shadow ? 210 : (faction == .cylon ? 158 : 130))*6
                 if carriers.allSatisfy({simd_distance($0.origin,position)>2100}) && simd_distance(position,planetPosition)>radius+planetRadius+250 { break }
             }
             let direction = unit(-position)
@@ -108,7 +109,7 @@ extension Dogfight {
             scene.rootNode.addChildNode(ship.node); scene.rootNode.addChildNode(ship.warp)
             for (slot,index) in squadron.enumerated() {
                 let f = fighters[index]
-                f.state = .arriving; f.entry = .hangar; f.entryTime = start+2.5+Float(slot)*0.35
+                f.state = .arriving; f.entry = faction == .earth ? .jumpWindow : .hangar; f.entryTime = start+2.5+Float(slot)*0.35
                 f.entryPosition = ship.launchPosition(slot:slot,at:f.entryTime-start)
                 f.entryForward = direction; f.formationSlot = slot; f.arrival = 0
                 f.hitPoints = 6; f.cooldown = 1.2; f.warp.isHidden = true; f.collisionCooldown = 25
@@ -120,11 +121,12 @@ extension Dogfight {
     }
 
     func updateArrival(_ f: Fighter) -> Bool {
-        if f.entry == .hangar {
+        if f.entry == .hangar || f.entry == .jumpWindow {
             guard time>=f.entryTime else { return false }
             activateFlight(f,position:f.entryPosition+f.entryForward*f.entrySpeed*max(0,time-f.entryTime),forward:f.entryForward,speed:f.entrySpeed)
             f.state = .active; f.arrival = 1; f.node.isHidden = false; f.node.opacity = 1
             f.warp.isHidden = true; reinforcements += 1
+            if f.entry == .jumpWindow { f.jumpClipper?.setPlane(origin:f.entryPosition,normal:f.entryForward) }
             return true
         }
         let progress = max(0,min(1,1+(time-f.entryTime)/1.25))
@@ -155,7 +157,9 @@ extension Dogfight {
             }
             var position = ship.station(age)
             var beam: Float = 0
-            if ship.faction.usesBlinkFTL {
+            if ship.faction.usesJumpWindow {
+                position = updateJumpWindow(ship,age:age)
+            } else if ship.faction.usesBlinkFTL {
                 ship.warp.isHidden = true
                 if age<ship.arrivalDuration {
                     ship.node.isHidden = true

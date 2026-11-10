@@ -189,6 +189,7 @@ final class Fighter {
     var generation = 0
     var orbitRate: Float = 0.185
     var scanner: SCNNode?
+    var jumpClipper: JumpClipper?
     var muzzles: [SCNNode] = []
     var gunCycle = 0
     var velocity = V3.zero
@@ -203,10 +204,14 @@ final class Fighter {
     var pursuitDeadline: Float = 0
     var pursuitBreakCount = 0
     var history: [(Float,V3)] = []
-    var entrySpeed: Float { entry == .hyperspace ? 28 : 160 }
+    var entrySpeed: Float { entry == .hyperspace ? 28 : (entry == .jumpWindow ? 85 : 160) }
     var cruiseSpeed: Float { faction == .rebel ? 48 : (faction == .empire ? 52 : 56) }
     let accelerationLimit: Float = 90
     let turnRate: Float = 2.0
+    var pivotUntil: Float = -100
+    var pivotCooldown: Float = 0
+    var pivotExit = V3(0,0,-1)
+    var pivotCount = 0
     var burstShotsLeft = 0
     let pair: Int
     let trailing: Bool
@@ -219,7 +224,7 @@ final class Fighter {
     var arrival: Float = 0
     var arrivalDelay: Float = 0
     var hitPoints = 6
-    enum Entry { case none, hyperspace, hangar }
+    enum Entry { case none, hyperspace, hangar, jumpWindow }
     var entry: Entry = .none
     var entryTime: Float = -1000
     var entryPosition = V3.zero
@@ -228,7 +233,7 @@ final class Fighter {
     var attackTarget: Int?
     var spin: SpinOut?
     var collisionCooldown: Float = 20
-    var formationHold: Float { entry == .hyperspace ? 2.1+Float(formationSlot)*0.13 : 0.8+Float(formationSlot)*0.08 }
+    var formationHold: Float { (entry == .hyperspace || entry == .jumpWindow) ? 2.1+Float(formationSlot)*0.13 : 0.8+Float(formationSlot)*0.08 }
     let warp = SCNNode()
     init(faction: Faction, side: Int, pair: Int, trailing: Bool, cooldown: Float) {
         self.faction = faction; self.side = side; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
@@ -254,8 +259,10 @@ final class Fighter {
         history.removeAll(keepingCapacity:true); breakUntil = -1
         pursuitTarget = nil; pursuitGeneration = -1; pursuitDeadline = 0; breakSpeed = 0; burstShotsLeft = 0
         pursuitBreakCount = 0
+        pivotUntil = -100; pivotCooldown = 0; pivotCount = 0
     }
     func cacheMuzzles() {
+        jumpClipper = faction == .earth ? JumpClipper(root:node) : nil
         muzzles.removeAll(keepingCapacity:true)
         node.enumerateChildNodes { child,_ in
             if child.name?.hasPrefix("muzzle.") == true { self.muzzles.append(child) }
@@ -370,6 +377,7 @@ final class Dogfight {
     var replacements: [FleetReplacement] = []
     var replacementCount = 0
     var encounteredFactions = Set<Faction>()
+    var starfuryPivots = 0
     var nextArrivalTime: Float = 0
     var persistentNodeCount = 0
     var blinkArrivals = 0
@@ -651,7 +659,7 @@ final class Dogfight {
             } else { f.burstShotsLeft = 0; f.cooldown = 0.04 }
         }
         updateLasers(dt); updateSparks(dt); updateEffects(dt)
-        updateReinforcements(dt); updateCarrier(); updateCamera(dt); updateBlasts(dt)
+        updateReinforcements(dt); updateCarrier(); updateFighterJumpClipping(); updateCamera(dt); updateBlasts(dt)
         for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
         planet?.update(time:time)
     }
@@ -1012,8 +1020,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             } else if let ship = battle.carrier {
                 let age = battle.time-ship.start
                 if age<0 { eventStatus.stringValue = "\(ship.faction.carrierName) APPROACHING" }
-                else if age<ship.arrivalDuration { eventStatus.stringValue = ship.faction.usesBlinkFTL ? "FTL DISPLACEMENT DETECTED" : "CAPITAL SHIP EXITING HYPERSPACE" }
-                else if !ship.departing { eventStatus.stringValue = "HANGAR LAUNCH / \(ship.faction.fighterName) DEPLOYING" }
+                else if age<ship.arrivalDuration {
+                    eventStatus.stringValue = ship.faction.usesJumpWindow ? (ship.faction == .earth ? "JUMP POINT OPENING" : "SHADOW CAPITAL EXITING JUMP POINT") : (ship.faction.usesBlinkFTL ? "FTL DISPLACEMENT DETECTED" : "CAPITAL SHIP EXITING HYPERSPACE")
+                }
+                else if !ship.departing { eventStatus.stringValue = "\(ship.faction == .earth ? "JUMP POINT" : "HANGAR LAUNCH") / \(ship.faction.fighterName) DEPLOYING" }
                 else { eventStatus.stringValue = "\(ship.faction.carrierName) DEPARTING" }
                 eventStatus.textColor = cyan
             } else {
@@ -1123,7 +1133,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard CommandLine.arguments.contains("--smoke-test"), let battle, let window else { return }
         let path = CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png"
         let output = URL(fileURLWithPath:path)
-        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"pursuitBreaks":battle.pursuitBreaks,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
+        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"pursuitBreaks":battle.pursuitBreaks,"starfuryPivots":battle.starfuryPivots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }
@@ -1135,6 +1145,10 @@ func requestedSeed() -> UInt64 {
 
 if CommandLine.arguments.contains("--verify-simulation") {
     verifySimulation()
+} else if CommandLine.arguments.contains("--verify-babylon") {
+    verifyBabylon()
+} else if let index = CommandLine.arguments.firstIndex(of:"--render-babylon-review"), index+1<CommandLine.arguments.count {
+    renderBabylonReview(directory:URL(fileURLWithPath:CommandLine.arguments[index+1]))
 } else if CommandLine.arguments.contains("--verify-pursuit") {
     verifyPursuitLimits()
 } else if CommandLine.arguments.contains("--combat-benchmark") {

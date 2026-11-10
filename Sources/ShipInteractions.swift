@@ -13,6 +13,7 @@ extension Dogfight {
     // This also breaks the symmetry of a perfectly head-on approach.
     func shipAvoidance(_ f: Fighter, positions: [V3], velocities: [V3], active: [Bool], speed: inout Float) -> V3 {
         guard let index = fighters.firstIndex(where:{$0 === f}) else { return .zero }
+        let travel = f.faction == .earth ? unit(f.velocity) : f.forward
         var steering = V3.zero
         for j in fighters.indices where j != index && active[j] {
             let other = fighters[j]
@@ -26,7 +27,7 @@ extension Dogfight {
             guard distance<spacing*1.5+sqrt(relativeSquared)*horizon else { continue }
             let closest = offset+relative*closestTime, miss = simd_length(closest)
             if miss<spacing && (closestTime>0 || distance<spacing*1.5) {
-                var lateral = closest-f.forward*simd_dot(closest,f.forward)
+                var lateral = closest-travel*simd_dot(closest,travel)
                 if simd_length_squared(lateral)<0.25 {
                     let commonVelocity = index<j ? relative : -relative
                     let axis = abs(unit(commonVelocity).y)<0.85 ? V3(0,1,0) : V3(1,0,0)
@@ -36,7 +37,7 @@ extension Dogfight {
                 let urgency = 1-closestTime/horizon
                 steering += unit(lateral)*(0.8+urgency*4)*(1-miss/spacing)
                 // Brake when gaining on a ship ahead; never accelerate into its tail.
-                if simd_dot(unit(-offset),f.forward)>0.35 && closestTime<1.8 {
+                if simd_dot(unit(-offset),travel)>0.35 && closestTime<1.8 {
                     speed = min(speed,max(f.cruiseSpeed*(friendly ? 0.65 : 0.85),simd_length(f.velocity)-35))
                 }
             }

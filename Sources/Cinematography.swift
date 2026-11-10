@@ -61,11 +61,11 @@ final class CinematicDirector {
             carrierLaunchShot = false
             carrierDollyDistance = 0
             caption = featuredCarrier?.faction.carrierName ?? "CAPITAL SHIP INBOUND"
-            detail = featuredCarrier?.faction.usesBlinkFTL == true ? "FTL BLINK / SQUADRON DEPLOYMENT" : "HYPERSPACE ARRIVAL / HANGAR DEPLOYMENT"
+            detail = featuredCarrier?.faction.usesJumpWindow == true ? "JUMP POINT OPENING / SQUADRON DEPLOYMENT" : (featuredCarrier?.faction.usesBlinkFTL == true ? "FTL BLINK / SQUADRON DEPLOYMENT" : "HYPERSPACE ARRIVAL / HANGAR DEPLOYMENT")
             carrierCuts += 1
         case .carrierDeparture:
-            caption = featuredCarrier?.faction.usesBlinkFTL == true ? "FTL JUMP" : "JUMP TO HYPERSPACE"
-            detail = "CAPITAL SHIP DEPARTURE"
+            caption = featuredCarrier?.faction == .earth ? "JUMP POINT CLOSING" : (featuredCarrier?.faction.usesBlinkFTL == true ? "FTL JUMP" : "JUMP TO HYPERSPACE")
+            detail = featuredCarrier?.faction == .earth ? "SQUADRON CLEAR / JUMP POINT COLLAPSE" : "CAPITAL SHIP DEPARTURE"
         case .handoff:
             featuredCarrier = nil
             caption = "SQUADRON APPROACHING"; detail = "FROM THE BATTLE / INCOMING SQUADRON TRACKING"; handoffCuts += 1
@@ -93,8 +93,8 @@ final class CinematicDirector {
         guard b.automatic else { return }
         // Keep the arrival camera and its shot clock through the same departure beat.
         if featuredCarrier === ship && event == .carrierArrival {
-            caption = ship.faction.usesBlinkFTL ? "FTL JUMP" : "JUMP TO HYPERSPACE"
-            detail = "SQUADRON DEPLOYED / CAPITAL SHIP DEPARTURE"
+            caption = ship.faction == .earth ? "JUMP POINT CLOSING" : (ship.faction.usesBlinkFTL ? "FTL JUMP" : "JUMP TO HYPERSPACE")
+            detail = ship.faction == .earth ? "SQUADRON CLEAR / JUMP POINT COLLAPSE" : "SQUADRON DEPLOYED / CAPITAL SHIP DEPARTURE"
             b.cameraChanged?()
         } else {
             if handoffIncoming.isEmpty { rememberIncomingSquadron(ship,in:b) }
@@ -250,7 +250,7 @@ final class CinematicDirector {
         let pull = linear*linear*(3-2*linear)
         let focus = mix(heroPosition,group,pull)
         let focusVelocity = mix(hero.active ? hero.velocity : .zero,groupVelocity,pull)
-        let offset = ship.forward*58-right*38-up*18
+        let offset = ship.faction == .shadow ? ship.forward*30-right*70-up*18 : ship.forward*58-right*38-up*18
         let outward = unit(offset)
         let screenRight = unit(simd_cross(-outward,V3(0,1,0)))
         let screenUp = unit(simd_cross(screenRight,-outward))
@@ -261,6 +261,14 @@ final class CinematicDirector {
             // Keep the launch station as the backdrop when the capital accelerates
             // into hyperspace; the camera continues following the fighters.
             framing.append(ship.station(age)+ship.node.simdOrientation.act(local*ship.scale))
+        }
+        if ship.faction == .shadow, let window = ship.jumpWindow {
+            // Reserve screen space before the departure aperture opens. The
+            // lateral launch angle prevents its dark core hiding the capital.
+            let portal = ship.origin+ship.forward*ship.worldRadius*1.6
+            for x: Float in [-1,1] { for y: Float in [-1,1] {
+                framing.append(portal+right*x*window.radius+up*y*window.radius)
+            } }
         }
         var fittedDistance: Float = 100
         for point in framing {
@@ -307,8 +315,17 @@ final class CinematicDirector {
                     desired = frame.position; look = frame.look; fov = 52
                 } else {
                     let reveal = min(1,max(0,age-ship.arrivalDuration))
-                    desired = anchor+(right*(220-reveal*12)+up*85+ship.forward*180)*framing
-                    look = anchor; fov = 50
+                    if let window = ship.jumpWindow {
+                        let portal = window.node.simdPosition
+                        let focus = ship.faction == .earth ? portal : mix(portal,anchor,min(1,max(0,(age-1.2)/0.9))*0.5)
+                        let outward = unit(ship.forward*2.2+right*0.7+up*0.4)
+                        desired = focus+outward*window.radius*2.9/max(0.65,min(1,b.viewportAspect))
+                        look = focus
+                    } else {
+                        desired = anchor+(right*(220-reveal*12)+up*85+ship.forward*180)*framing
+                        look = anchor
+                    }
+                    fov = 50
                 }
                 if age>ship.departureAge+ship.departureDuration {
                     if !startArrivalHandoff(in:b) { endEvent(in:b,follow:ship.squadron.first) }

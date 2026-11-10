@@ -49,6 +49,8 @@ final class Carrier {
     let faction: Faction
     let side: Int
     let warp: SCNNode
+    let jumpWindow: JumpWindow?
+    let jumpClipper: JumpClipper?
     let origin: V3
     let forward: V3
     let start: Float
@@ -58,13 +60,13 @@ final class Carrier {
     var departing = false
     var departureAge: Float { lastLaunchAge+0.18 }
     var lastLaunchAge: Float { 2.5+Float(max(0,squadron.count-1))*0.35 }
-    var departureDuration: Float { faction.usesBlinkFTL ? 0.65 : 1.5 }
+    var departureDuration: Float { faction == .earth ? 0.7 : (faction == .shadow ? 2.6 : (faction.usesBlinkFTL ? 0.65 : 1.5)) }
     let scale: Float = 6
     var blinkEntered = false
     var blinkExited = false
-    var arrivalDuration: Float { faction.usesBlinkFTL ? 0.85 : 1.4 }
+    var arrivalDuration: Float { faction.usesJumpWindow ? 2.1 : (faction.usesBlinkFTL ? 0.85 : 1.4) }
     var cameraBounds: V3 {
-        switch faction { case .colonial: return V3(84,30,130); case .cylon: return V3(158,30,158); default: return V3(77,44,130) }
+        switch faction { case .colonial: return V3(84,30,130); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return V3(37,37,1); default: return V3(77,44,130) }
     }
     // The Imperial bridge is above the hull. Centering its exclusion volume at
     // the origin incorrectly blocked empty space beneath the launch bay.
@@ -73,6 +75,7 @@ final class Carrier {
     var worldRadius: Float { max(cameraBounds.x,max(cameraBounds.y,cameraBounds.z))*scale }
     init(faction: Faction = .empire, side: Int = 1, origin: V3, forward: V3, start: Float, squadron: [Int]) {
         self.faction = faction; self.side = side; node = faction.capitalModel()
+        jumpClipper = faction == .shadow ? JumpClipper(root:node) : nil
         self.origin = origin; self.forward = forward; self.start = start; self.squadron = squadron
         let modelRoot = node
         var corners = [V3]()
@@ -90,19 +93,30 @@ final class Carrier {
             let direction = V3(x,y,z)
             if direction != .zero, let point = corners.max(by:{simd_dot($0,direction)<simd_dot($1,direction)}), !silhouette.contains(point) { silhouette.append(point) }
         } } }
+        if faction == .earth {
+            silhouette = [V3(-37,-37,0),V3(-37,37,0),V3(37,-37,0),V3(37,37,0)]
+        }
         framingPoints = silhouette
-        warp = box(V3(3,3,1),material(color(0.5,0.8,1),emission:color(1,2,3)))
+        if faction.usesJumpWindow {
+            let window = JumpWindow(radius:faction == .earth ? 220 : 1250,forward:forward)
+            jumpWindow = window; warp = window.node
+        } else {
+            jumpWindow = nil
+            warp = box(V3(3,3,1),material(color(0.5,0.8,1),emission:color(1,2,3)))
+        }
         node.isHidden = true; warp.isHidden = true
         node.simdScale = V3(repeating:scale)
         node.look(at:SCNVector3(forward),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
     }
-    func station(_ age: Float) -> V3 { faction.usesBlinkFTL ? origin : origin+forward*max(0,min(departureAge-1.4,age-1.4))*3 }
+    func station(_ age: Float) -> V3 { (faction.usesBlinkFTL || faction.usesJumpWindow) ? origin : origin+forward*max(0,min(departureAge-1.4,age-1.4))*3 }
     func launchPosition(slot: Int, at age: Float) -> V3 {
         let sign: Float = slot%2 == 0 ? -1 : 1
         let port: V3
         switch faction {
         case .colonial: port = V3(sign*57,-3,-90)
         case .cylon: port = V3(sign*20,-34,-30)
+        case .shadow: port = V3(sign*22,-32,-56)
+        case .earth: port = V3(sign*(4+Float(slot/2)*3),Float(slot%3-1)*3,0)
         default: port = V3(sign*11,-16,15)
         }
         return station(age)+node.simdOrientation.act(port*scale)

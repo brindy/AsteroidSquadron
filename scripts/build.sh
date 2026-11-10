@@ -13,13 +13,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>dev.brindy.asteroid-squadron</string>
 <key>CFBundleExecutable</key><string>AsteroidSquadron</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>12</string>
-<key>CFBundleShortVersionString</key><string>1.11</string>
+<key>CFBundleVersion</key><string>14</string>
+<key>CFBundleShortVersionString</key><string>1.13</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
-<key>NSHumanReadableCopyright</key><string>Unofficial fan project. Star Wars and Battlestar Galactica belong to their respective owners.</string>
+<key>NSHumanReadableCopyright</key><string>Unofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners.</string>
 </dict></plist>
 PLIST
 codesign --force --sign - "$APP"

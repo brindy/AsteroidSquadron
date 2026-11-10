@@ -28,7 +28,7 @@ func interceptPoint(from origin: V3, velocity: V3, target: V3, targetVelocity: V
 
 extension Faction {
     var collisionRadius: Float {
-        switch self { case .rebel: return 6.7; case .empire: return 5.5; case .colonial: return 7; case .cylon: return 8.7 }
+        switch self { case .rebel: return 6.7; case .empire: return 5.5; case .colonial: return 7; case .cylon: return 8.7; case .earth: return 7.3; case .shadow: return 8 }
     }
     var hitVolumes: [(V3,Float)] {
         switch self {
@@ -36,6 +36,8 @@ extension Faction {
         case .empire: return [(.zero,1.3),(V3(-3.1,0,0),2.6),(V3(3.1,0,0),2.6)]
         case .colonial: return [(V3(0,0,-1),1.25),(V3(0,0,-4.5),0.6),(V3(-2.6,-0.3,1.5),1),(V3(2.6,-0.3,1.5),1)]
         case .cylon: return [(V3(0,0,-0.7),1.3),(V3(-3,0,-1),1.2),(V3(3,0,-1),1.2),(V3(-5,0,-3.4),0.8),(V3(5,0,-3.4),0.8)]
+        case .earth: return [(.zero,1.4),(V3(-4.5,-3.2,0.9),1.2),(V3(-4.5,3.2,0.9),1.2),(V3(4.5,-3.2,0.9),1.2),(V3(4.5,3.2,0.9),1.2)]
+        case .shadow: return [(V3(0,0,0.4),1.7),(V3(-4,0,0),1.2),(V3(4,0,0),1.2),(V3(-3,0,-3),0.7),(V3(3,0,-3),0.7)]
         }
     }
 }
@@ -56,7 +58,7 @@ extension Dogfight {
         for muzzle in barrels {
             let transform = muzzle.simdWorldTransform
             let origin = transform.columns.3.xyz, forward = unit(-transform.columns.2.xyz)
-            let length: Float = f.faction.usesBlinkFTL ? 1.3 : 4.2
+            let length: Float = (f.faction.usesBlinkFTL || f.faction.usesJumpWindow) ? 1.3 : 4.2
             let bolt = SCNNode(); bolt.simdPosition = origin
             bolt.addChildNode(box(V3(0.1,0.1,length),projectileMaterials[f.faction]!,V3(0,0,-length/2)))
             bolt.simdOrientation = simd_quatf(from:V3(0,0,-1),to:forward)

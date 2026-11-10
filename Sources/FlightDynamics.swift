@@ -36,6 +36,7 @@ extension Dogfight {
         f.navigationUp = V3(0,1,0); f.bank = 0; f.motionInitialized = true
         f.pursuitTarget = nil; f.pursuitGeneration = -1; f.pursuitDeadline = 0
         f.pursuitBreakCount = 0
+        f.pivotUntil = -100; f.pivotCooldown = time+3+Float(f.pair)*0.6; f.pivotCount = 0
         f.breakUntil = -1; f.breakSpeed = 0; f.burstShotsLeft = 0
         f.history.removeAll(keepingCapacity:true); f.history.append((time,position))
         f.applyFlightPose()
@@ -60,6 +61,7 @@ extension Dogfight {
         f.breakSpeed = f.cruiseSpeed*rng.range(1.15,1.5)
         f.breakUntil = time+rng.range(1.8,2.9)
         f.attackTarget = next; f.burstShotsLeft = 0
+        f.pivotUntil = -100
         f.pursuitTarget = next; f.pursuitGeneration = fighters[next].generation
         f.pursuitDeadline = f.breakUntil+rng.range(5,10)
         pursuitBreaks += 1
@@ -101,14 +103,16 @@ extension Dogfight {
         } else { f.pursuitDeadline = 0 }
         var desired = time<f.breakUntil ? f.breakDirection : unit(goal-f.position)
         if time<f.breakUntil { speed = max(speed,f.breakSpeed) }
+        // An inertially drifting Starfury must watch its flight path, not its nose.
+        let travel = f.faction == .earth ? unit(f.velocity) : f.forward
         let lookAhead = max(80,simd_length(f.velocity)*3)
         var avoidance = V3.zero
         for rock in rocks {
             let to = rock.position-f.position
-            let along = simd_dot(to,f.forward)
+            let along = simd_dot(to,travel)
             let radius = rock.radius+f.faction.collisionRadius+12
             guard along > -radius && along<lookAhead, simd_length_squared(to)<pow(lookAhead+radius,2) else { continue }
-            let closest = f.position+f.forward*max(0,along)-rock.position
+            let closest = f.position+travel*max(0,along)-rock.position
             let separation = simd_length(closest)
             guard separation<radius else { continue }
             let side = separation>0.5 ? closest/separation : unit(f.navigationUp+V3(Float(f.pair%2)*2-1,0,0)*0.4)
@@ -118,17 +122,45 @@ extension Dogfight {
         }
         let traffic = shipAvoidance(f,positions:positions,velocities:velocities,active:active,speed:&speed)
         desired = unit(desired+avoidance+traffic)
-        let limitedDirection = turnToward(f.forward,desired,radians:f.turnRate*dt)
-        let acceleration = bounded((limitedDirection*speed-f.velocity)/dt,length:f.accelerationLimit)
-        f.velocity += acceleration*dt
-        f.forward = unit(f.velocity)
+        let acceleration: V3
+        if f.faction == .earth {
+            let hazard = simd_length_squared(avoidance)>0.06 || simd_length_squared(traffic)>0.25
+            if hazard || time<f.breakUntil { f.pivotUntil = -100 }
+            if !hazard, time>=f.breakUntil, time>=f.pivotCooldown,
+               f.pursuitDeadline-time>2.6, let target = f.attackTarget, fighters[target].active,
+               simd_distance(f.position,positions[target])>65, simd_distance(f.position,positions[target])<550,
+               simd_dot(f.forward,unit(goal-f.position))<0.85 {
+                f.pivotUntil = time+2.4
+                f.pivotCooldown = f.pivotUntil+rng.range(7,12); f.pivotCount += 1; starfuryPivots += 1
+            }
+            let pivoting = time<f.pivotUntil
+            let burning = !pivoting && time<f.pivotUntil+1.3
+            let nose = pivoting ? unit(goal-f.position) : (burning ? f.pivotExit : desired)
+            f.forward = turnToward(f.forward,nose,radians:f.turnRate*dt)
+            if pivoting { f.pivotExit = f.forward }
+            // Brake to a slow inertial drift while RCS turns the hull. The short
+            // burn afterwards accelerates along the new nose without teleporting.
+            let flightDirection = pivoting ? travel : (burning ? f.pivotExit : turnToward(travel,desired,radians:f.turnRate*dt))
+            let flightSpeed: Float = pivoting ? 18 : (burning ? f.cruiseSpeed*1.3 : speed)
+            acceleration = bounded((flightDirection*flightSpeed-f.velocity)/dt,length:f.accelerationLimit)
+            f.velocity += acceleration*dt
+            f.node.enumerateChildNodes { child,_ in
+                if child.name?.hasPrefix("rcs.") == true { child.opacity = pivoting ? CGFloat(0.65+0.25*sin(self.time*29+Float(f.pair))) : 0 }
+                if child.name?.hasPrefix("drive.") == true { child.opacity = pivoting ? 0.12 : 1 }
+            }
+        } else {
+            let limitedDirection = turnToward(f.forward,desired,radians:f.turnRate*dt)
+            acceleration = bounded((limitedDirection*speed-f.velocity)/dt,length:f.accelerationLimit)
+            f.velocity += acceleration*dt
+            f.forward = unit(f.velocity)
+        }
         f.position += f.velocity*dt
         // Parallel-transport the cockpit up vector; don't rebuild a rolling ship from Euler angles.
         f.navigationUp = simd_quatf(from:oldForward,to:f.forward).act(f.navigationUp)
         let level = V3(0,1,0)-f.forward*simd_dot(V3(0,1,0),f.forward)
         if simd_length_squared(level)>0.08 { f.navigationUp = unit(mix(f.navigationUp,unit(level),1-exp(-dt*0.45))) }
         let right = unit(simd_cross(f.forward,f.navigationUp))
-        let desiredBank = -simd_dot(acceleration,right)/f.accelerationLimit*0.7
+        let desiredBank = f.faction == .earth && time<f.pivotUntil ? 0 : -simd_dot(acceleration,right)/f.accelerationLimit*0.7
         f.bank += (desiredBank-f.bank)*(1-exp(-dt*4))
         f.applyFlightPose()
         if f.spin == nil { tryAsteroidStrike(f,from:old,dt:dt) }
