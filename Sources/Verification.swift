@@ -339,15 +339,17 @@ private func verifyWeaponsAndMotion() {
 }
 
 private func verifyContinuousDeployments() {
+  for aspect: Float in [1.0,1.6,2.0] {
     for faction in [Faction.empire,.colonial,.cylon] {
         let b = Dogfight(seed:710,initialFactions:[faction,.rebel],initialArrivals:false)
+        b.viewportAspect = aspect
         b.rocks.removeAll()
         for f in b.fighters where f.side == 0 { b.destroy(f) }
         b.deployReinforcements(side:0)
         let ship = b.carriers[0]
         check(ship.scale == 6,"Capital ship lost its epic scale")
         check(ship.departureAge-ship.lastLaunchAge<=0.2,"Capital ship lingers after last launch")
-        var cuts: Int?, departed = false, lastLaunch: Float?
+        var cuts: Int?, departed = false, lastLaunch: Float?, closeDistance: Float?, wideDistance: Float?, handoffChecked = false
         for _ in 0..<420 {
             for f in b.fighters { f.cooldown = 10000 }
             b.update(dt:1.0/60)
@@ -358,22 +360,89 @@ private func verifyContinuousDeployments() {
                 if let cuts { check(cuts == b.director.hardCuts,"Fighter launch and departure contain an extra camera cut") }
                 else { cuts = b.director.hardCuts }
             }
-            if age>2.8 && age<4.2, let hero = ship.squadron.first {
+            if age>2.5 && age<2.58, let hero = ship.squadron.first {
                 let f = b.fighters[hero]
-                check(simd_distance(b.cameraPosition,f.position)<110,"Launching fighter is too small in the capital ship shot")
+                closeDistance = simd_distance(b.cameraPosition,f.position)
+                check(closeDistance!<125,"Launch shot did not begin close to the first fighter")
                 check(simd_dot(unit(f.position-b.cameraPosition),unit(b.cameraLook-b.cameraPosition))>0.98,"Launching fighter is outside the composition")
+            }
+            if age>4.28 && age<ship.departureAge+ship.departureDuration-0.02 {
+                let group = ship.squadron.map { b.fighters[$0].position }.reduce(V3.zero,+)/Float(ship.squadron.count)
+                wideDistance = simd_distance(b.cameraPosition,group)
+                check(simd_distance(b.cameraLook,group)<4,"Pullback stopped tracking the fighter group")
+                func framed(_ point: V3) -> Bool {
+                    let p = b.camera.simdConvertPosition(point,from:nil)
+                    let tangent = tan(Float(b.camera.camera!.fieldOfView)*Float.pi/360)
+                    return p.z < -1 && abs(p.y)<(-p.z)*tangent && abs(p.x)<(-p.z)*tangent*b.viewportAspect
+                }
+                check(ship.squadron.allSatisfy{framed(b.fighters[$0].position)},"Pullback lost one of the emerging fighters")
+                for local in ship.framingPoints where age<ship.departureAge {
+                    let world = ship.station(age)+ship.node.simdOrientation.act(local*ship.scale)
+                    check(framed(world),"Pullback did not reveal the whole \(faction) capital ship")
+                }
             }
             if ship.departing && !departed {
                 departed = true
                 check(lastLaunch != nil && age-lastLaunch!<=0.22,"Capital departure did not immediately follow the final fighter")
             }
+            if b.director.event == .handoff {
+                let group = ship.squadron.map { b.fighters[$0].position }.reduce(V3.zero,+)/Float(ship.squadron.count)
+                if !handoffChecked {
+                    check(age>ship.departureAge+ship.departureDuration,"Handoff interrupted the capital departure")
+                    let expected = b.fighters.indices.filter { b.fighters[$0].active && !ship.squadron.contains($0) }.min { simd_distance_squared(b.fighters[$0].position,group)<simd_distance_squared(b.fighters[$1].position,group) }
+                    check(b.director.handoffAnchor == expected,"Departure handoff did not choose the nearest existing ship")
+                    handoffChecked = true
+                }
+                check(simd_distance(b.cameraLook,group)<0.1,"Handoff camera is not trained on the incoming squadron")
+                let local = b.camera.simdConvertPosition(b.fighters[b.followedIndex].position,from:nil)
+                let tangent = tan(Float(b.camera.camera!.fieldOfView)*Float.pi/360)
+                check(local.z<0 && abs(local.y)<(-local.z)*tangent && abs(local.x)<(-local.z)*tangent*b.viewportAspect,"Existing fighter left the handoff composition")
+            }
         }
         check(departed && b.carriers.isEmpty && b.director.carrierLaunchCuts == 1,"Capital deployment shot sequence failed")
+        check(closeDistance != nil && wideDistance != nil && wideDistance!>closeDistance!*4,"Launch camera did not physically pull back")
+        check(handoffChecked && b.director.handoffCuts == 1,"Capital departure did not hand off to an existing fighter")
     }
-    print("PASS: all three capital ships get a wide reveal, readable foreground fighters, and immediate departure within the same launch shot.")
+  }
+    print("PASS: all three capital ships, three window shapes: close launch, continuous pullback framing the full capital and all fighters, and group tracking through departure.")
+}
+
+private func handoffFixture() -> Dogfight {
+    let b = Dogfight(seed:411,initialFactions:[.rebel,.empire],initialArrivals:false)
+    for rock in b.rocks { rock.node.removeFromParentNode() }; b.rocks.removeAll()
+    let roster = [0,1,4,5]
+    for i in b.fighters.indices where !roster.contains(i) { b.fighters[i].state = .destroyed; b.fighters[i].node.isHidden = true }
+    for (index,position) in [(0,V3(0,250,-500)),(4,V3(35,265,-520)),(1,V3(0,250,0)),(5,V3(300,250,80))] {
+        b.activateFlight(b.fighters[index],position:position,forward:V3(0,0,-1),speed:52)
+    }
+    let carrier = Carrier(faction:.empire,side:0,origin:V3(0,250,-700),forward:V3(0,0,1),start:0,squadron:[0,4])
+    b.director.rememberIncomingSquadron(carrier,in:b)
+    return b
+}
+
+private func verifyArrivalHandoff() {
+    let b = handoffFixture()
+    check(b.director.startArrivalHandoff(in:b),"Handoff rejected a valid existing fighter")
+    b.updateCamera(0)
+    check(b.director.handoffAnchor == 1,"Handoff chose a newly arrived or more distant fighter")
+    let anchor = b.fighters[1]
+    check(simd_dot(b.cameraPosition-anchor.position,anchor.forward)<(-10),"Handoff did not place the camera behind the existing pilot")
+    check(b.camera.simdConvertPosition(anchor.position,from:nil).z<0,"Existing pilot is not in front of the handoff camera")
+    b.destroy(anchor); b.updateCamera(1.0/60)
+    check(b.director.event == .handoff && b.director.handoffAnchor == 5,"Destroyed handoff anchor did not fall back to another existing survivor")
+    b.fighters[5].replaceFaction(.colonial); b.fighters[5].state = .active; b.fighters[5].node.isHidden = false
+    b.updateCamera(1.0/60)
+    check(b.director.event == .none && b.cameraIndex == 2,"Handoff attached to a replacement generation instead of returning wide")
+    let manual = handoffFixture(); manual.automatic = false
+    check(!manual.director.startArrivalHandoff(in:manual) && manual.director.event == .none,"Handoff overrode manual camera mode")
+    let initial = Dogfight(seed:412,initialFactions:[.colonial,.cylon])
+    for _ in 0..<330 { initial.update(dt:1.0/60) }
+    check(initial.director.handoffCuts == 0 && initial.director.event == .none,"Initial deployment invented an existing ship to follow")
+    print("PASS: nearest existing pilot, rear camera pose, incoming aim, destroyed-anchor fallback, generation protection, manual control and no-existing-ship fallback.")
 }
 
 func verifySimulation() {
+    verifyArrivalHandoff()
     verifyPursuitLimits()
     verifyCriticalDirector()
     verifyBattlefieldFraming()
@@ -399,7 +468,7 @@ func verifySimulation() {
                 activeSeconds += Float(battle.activeCount)/30
                 battle.update(dt:1.0/30.0)
                 let event = battle.director.event
-                if event != .formation && event != .carrierArrival && event != .carrierDeparture && battle.activeCount>0 {
+                if event != .formation && event != .carrierArrival && event != .carrierDeparture && event != .handoff && battle.activeCount>0 {
                     combatFrames += 1
                     if event == .none && battle.cameraIndex == 2 { wideFrames += 1 }
                 }
@@ -614,11 +683,15 @@ func renderReview(directory: URL) {
             if age>2.5 && age<2.6 { name = "formation-held" }
             if age>4.7 && age<4.8 { name = "formation-break" }
         case .carrierArrival:
+            if age>2.55 && age<2.65 { name = "carrier-launch-close" }
             if age>1.6 && age<1.7 { name = "carrier-arrival" }
             if age>3.7 && age<3.8 { name = "carrier-hangar" }
+            if age>4.26 && age<4.36 { name = "carrier-pullback" }
             if let ship = battle.director.featuredCarrier, battle.time-ship.start>ship.departureAge+0.55 { name = "carrier-departure" }
         case .carrierDeparture:
             if age>0.55 && age<0.65 { name = "carrier-departure" }
+        case .handoff:
+            if age>0.7 && age<0.8 { name = "carrier-handoff" }
         default: break
         }
         if let name, captured.insert(name).inserted {
@@ -631,6 +704,11 @@ func renderReview(directory: URL) {
     var jumps = Set<String>()
     for _ in 0..<640 {
         bsg.update(dt:1.0/30.0)
+        if bsg.director.event == .handoff && bsg.director.eventAge>0.7 && bsg.director.eventAge<0.8 {
+            let prefix = bsg.director.handoffIncoming.first.map { bsg.fighters[$0.index].faction.rawValue } ?? "squadron"
+            let name = prefix+"-handoff"
+            if jumps.insert(name).inserted { save(name,at:Double(bsg.time)) }
+        }
         guard let ship = bsg.director.featuredCarrier else { continue }
         let age = bsg.time-ship.start, prefix = ship.faction.rawValue
         var name: String?
@@ -638,7 +716,9 @@ func renderReview(directory: URL) {
             if age>0.79 && age<0.85 { name = prefix+"-before-blink" }
             if age>0.86 && age<0.94 { name = prefix+"-blink-in" }
             if age>1.45 && age<1.55 { name = prefix+"-arrived" }
+            if age>2.55 && age<2.65 { name = prefix+"-launch-close" }
             if age>3.9 && age<4.05 { name = prefix+"-launch" }
+            if age>4.26 && age<4.36 { name = prefix+"-pullback" }
             let sinceDeparture = age-ship.departureAge
             if sinceDeparture>0 && sinceDeparture<0.09 { name = prefix+"-blink-out" }
             if sinceDeparture>0.5 && sinceDeparture<0.6 { name = prefix+"-after-blink" }

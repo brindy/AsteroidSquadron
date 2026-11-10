@@ -53,6 +53,7 @@ final class Carrier {
     let forward: V3
     let start: Float
     let squadron: [Int]
+    let framingPoints: [V3]
     var announced = false
     var departing = false
     var departureAge: Float { lastLaunchAge+0.18 }
@@ -73,6 +74,23 @@ final class Carrier {
     init(faction: Faction = .empire, side: Int = 1, origin: V3, forward: V3, start: Float, squadron: [Int]) {
         self.faction = faction; self.side = side; node = faction.capitalModel()
         self.origin = origin; self.forward = forward; self.start = start; self.squadron = squadron
+        let modelRoot = node
+        var corners = [V3]()
+        node.enumerateChildNodes { child,_ in
+            guard let geometry = child.geometry else { return }
+            let bounds = geometry.boundingBox, lo = V3(bounds.min), hi = V3(bounds.max)
+            for x in [lo.x,hi.x] { for y in [lo.y,hi.y] { for z in [lo.z,hi.z] {
+                corners.append(child.simdConvertPosition(V3(x,y,z),to:modelRoot))
+            } } }
+        }
+        // Cache the model's support points instead of framing empty corners of
+        // one enormous bounding box around a long hull or six-armed basestar.
+        var silhouette = [V3]()
+        for x: Float in [-1,0,1] { for y: Float in [-1,0,1] { for z: Float in [-1,0,1] {
+            let direction = V3(x,y,z)
+            if direction != .zero, let point = corners.max(by:{simd_dot($0,direction)<simd_dot($1,direction)}), !silhouette.contains(point) { silhouette.append(point) }
+        } } }
+        framingPoints = silhouette
         warp = box(V3(3,3,1),material(color(0.5,0.8,1),emission:color(1,2,3)))
         node.isHidden = true; warp.isHidden = true
         node.simdScale = V3(repeating:scale)

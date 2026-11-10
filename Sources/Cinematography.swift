@@ -9,7 +9,7 @@ struct ArrivalFlight {
 }
 
 final class CinematicDirector {
-    enum Event { case none, formation, carrierArrival, carrierDeparture, spin, attack, explosion }
+    enum Event { case none, formation, carrierArrival, carrierDeparture, handoff, spin, attack, explosion }
     var event: Event = .none
     var eventAge: Float = 0
     var arrivalFlight: ArrivalFlight?
@@ -38,6 +38,13 @@ final class CinematicDirector {
     var carrierCuts = 0
     var carrierLaunchCuts = 0
     var carrierLaunchShot = false
+    var carrierDollyDistance: Float = 0
+    var handoffIncoming: [(index: Int,generation: Int)] = []
+    var handoffExisting: [(index: Int,generation: Int)] = []
+    var handoffAnchor: Int?
+    var handoffSide: Float = 10
+    var handoffHeight: Float = 7
+    var handoffCuts = 0
     var dangerCuts = 0
     var normalCuts = 0
     var hardCuts = 0
@@ -52,12 +59,16 @@ final class CinematicDirector {
         case .formation: caption = "SQUADRON INBOUND"; detail = "X-WING FORMATION / HYPERSPACE INSERTION"; formationCuts += 1
         case .carrierArrival:
             carrierLaunchShot = false
+            carrierDollyDistance = 0
             caption = featuredCarrier?.faction.carrierName ?? "CAPITAL SHIP INBOUND"
             detail = featuredCarrier?.faction.usesBlinkFTL == true ? "FTL BLINK / SQUADRON DEPLOYMENT" : "HYPERSPACE ARRIVAL / HANGAR DEPLOYMENT"
             carrierCuts += 1
         case .carrierDeparture:
             caption = featuredCarrier?.faction.usesBlinkFTL == true ? "FTL JUMP" : "JUMP TO HYPERSPACE"
             detail = "CAPITAL SHIP DEPARTURE"
+        case .handoff:
+            featuredCarrier = nil
+            caption = "SQUADRON APPROACHING"; detail = "FROM THE BATTLE / INCOMING SQUADRON TRACKING"; handoffCuts += 1
         case .spin:
             caption = "LOSS OF CONTROL"
             detail = b.fighters[b.followedIndex].spin?.cause == .ship ? "SHIP COLLISION / RECOVERY TRACKING" : "ASTEROID STRIKE / RECOVERY TRACKING"
@@ -66,12 +77,17 @@ final class CinematicDirector {
             caption = "HOT PURSUIT"; detail = "CRITICAL ATTACK RUN / TARGET UNDER FIRE"; attackCuts += 1
         case .explosion:
             caption = "FIGHTER DESTROYED"; detail = "COMBAT LOSS / EXPLOSION TRACKING"; explosionCuts += 1
-        case .none: caption = nil; detail = nil; featuredCarrier = nil
+        case .none:
+            caption = nil; detail = nil; featuredCarrier = nil
+            handoffIncoming.removeAll(); handoffExisting.removeAll(); handoffAnchor = nil
         }
         b.cameraChanged?()
     }
     func requestCarrierArrival(_ ship: Carrier, in b: Dogfight) {
-        if b.automatic { featuredCarrier = ship; begin(.carrierArrival,in:b) }
+        if b.automatic {
+            rememberIncomingSquadron(ship,in:b)
+            featuredCarrier = ship; begin(.carrierArrival,in:b)
+        }
     }
     func requestCarrierDeparture(_ ship: Carrier, in b: Dogfight) {
         guard b.automatic else { return }
@@ -80,7 +96,10 @@ final class CinematicDirector {
             caption = ship.faction.usesBlinkFTL ? "FTL JUMP" : "JUMP TO HYPERSPACE"
             detail = "SQUADRON DEPLOYED / CAPITAL SHIP DEPARTURE"
             b.cameraChanged?()
-        } else { featuredCarrier = ship; begin(.carrierDeparture,in:b) }
+        } else {
+            if handoffIncoming.isEmpty { rememberIncomingSquadron(ship,in:b) }
+            featuredCarrier = ship; begin(.carrierDeparture,in:b)
+        }
     }
     func requestSpin(_ index: Int, in b: Dogfight) {
         guard b.automatic, event == .none, b.cameraIndex == 2, b.time>=nextHighlightTime, b.time-lastDangerTime>8, b.cameraAge>8 else { return }
@@ -215,6 +234,44 @@ final class CinematicDirector {
         velocity = (velocity-temp*frequency)*e
         value = target+(offset+temp)*e
     }
+    func carrierLaunchFrame(_ ship: Carrier, in b: Dogfight) -> (position: V3, look: V3) {
+        let age = b.time-ship.start
+        let up = ship.node.simdOrientation.act(V3(0,1,0))
+        let right = unit(simd_cross(ship.forward,V3(0,1,0)))
+        let hero = b.fighters[ship.squadron[0]]
+        let heroPosition = hero.active ? hero.position : hero.entryPosition
+        let members = ship.squadron.map { b.fighters[$0] }
+        // Include the launch lanes before each fighter appears, so a new arrival
+        // does not jerk the centroid from one hangar to the opposite one.
+        let points = members.map { $0.active ? $0.position : $0.entryPosition }
+        let group = points.reduce(V3.zero,+)/Float(points.count)
+        let groupVelocity = members.reduce(V3.zero) { $0+($1.active ? $1.velocity : .zero) }/Float(members.count)
+        let linear = min(1,max(0,(age-2.5)/max(0.5,ship.lastLaunchAge-2.5-0.3)))
+        let pull = linear*linear*(3-2*linear)
+        let focus = mix(heroPosition,group,pull)
+        let focusVelocity = mix(hero.active ? hero.velocity : .zero,groupVelocity,pull)
+        let offset = ship.forward*58-right*38-up*18
+        let outward = unit(offset)
+        let screenRight = unit(simd_cross(-outward,V3(0,1,0)))
+        let screenUp = unit(simd_cross(screenRight,-outward))
+        let tangent = tan(Float(26)*Float.pi/180) // Fixed 52° lens: a dolly, not a zoom.
+        let fullFocus = group+up*2
+        var framing = points
+        for local in ship.framingPoints {
+            // Keep the launch station as the backdrop when the capital accelerates
+            // into hyperspace; the camera continues following the fighters.
+            framing.append(ship.station(age)+ship.node.simdOrientation.act(local*ship.scale))
+        }
+        var fittedDistance: Float = 100
+        for point in framing {
+            let delta = point-fullFocus
+            let transverse = max(abs(simd_dot(delta,screenUp))/tangent,abs(simd_dot(delta,screenRight))/(tangent*b.viewportAspect))
+            fittedDistance = max(fittedDistance,simd_dot(delta,outward)+transverse*1.1+20)
+        }
+        carrierDollyDistance = max(carrierDollyDistance,fittedDistance)
+        let distance = simd_length(offset)+(carrierDollyDistance-simd_length(offset))*pull
+        return (focus+focusVelocity*(2/7)+outward*distance,focus+up*2)
+    }
     func update(_ dt: Float, in b: Dogfight) {
         eventAge += dt; shake *= exp(-dt*8)
         if !b.automatic && event != .none { begin(.none,in:b) }
@@ -245,27 +302,35 @@ final class CinematicDirector {
                     // Keep this foreground fighter / background capital composition through departure.
                     carrierLaunchShot = true; carrierLaunchCuts += 1; b.cut = true
                 }
-                if carrierLaunchShot, let index = ship.squadron.first {
-                    let hero = b.fighters[index]
-                    let subject = hero.active ? hero.position : hero.entryPosition
-                    let shipUp = ship.node.simdOrientation.act(up)
-                    let lead = hero.active ? hero.velocity*(2/7) : .zero
-                    desired = subject+lead+ship.forward*58-right*38-shipUp*18
-                    look = subject+shipUp*2; fov = 52
+                if carrierLaunchShot {
+                    let frame = carrierLaunchFrame(ship,in:b)
+                    desired = frame.position; look = frame.look; fov = 52
                 } else {
                     let reveal = min(1,max(0,age-ship.arrivalDuration))
                     desired = anchor+(right*(220-reveal*12)+up*85+ship.forward*180)*framing
                     look = anchor; fov = 50
                 }
-                if age>ship.departureAge+ship.departureDuration { endEvent(in:b,follow:ship.squadron.first); update(0,in:b); return }
+                if age>ship.departureAge+ship.departureDuration {
+                    if !startArrivalHandoff(in:b) { endEvent(in:b,follow:ship.squadron.first) }
+                    update(0,in:b); return
+                }
             } else {
                 desired = anchor+(right*310+up*100+ship.forward*220)*framing
                 look = ship.faction.usesBlinkFTL ? anchor : anchor+ship.forward*min(190,max(0,age-ship.departureAge)*115)
                 fov = 51
-                if eventAge>(ship.faction.usesBlinkFTL ? 0.65 : 2) { endEvent(in:b); update(0,in:b); return }
+                if eventAge>(ship.faction.usesBlinkFTL ? 0.65 : 2) {
+                    if !startArrivalHandoff(in:b) { endEvent(in:b) }
+                    update(0,in:b); return
+                }
             }
         } else if event == .carrierArrival || event == .carrierDeparture {
-            endEvent(in:b); update(0,in:b); return
+            if !startArrivalHandoff(in:b) { endEvent(in:b) }
+            update(0,in:b); return
+        } else if event == .handoff {
+            guard eventAge<3.5, let frame = arrivalHandoffFrame(in:b) else {
+                endEvent(in:b); update(0,in:b); return
+            }
+            desired = frame.position; look = frame.look; fov = frame.fov
         } else if event == .attack {
             let f = b.fighters[b.followedIndex]
             guard let index = engagementTarget, f.active, b.fighters[index].active, eventAge<2.6 else {
@@ -335,10 +400,14 @@ final class CinematicDirector {
         if b.cut {
             hardCuts += 1
             b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
+        } else if event == .handoff {
+            // Attach this brief over-shoulder shot to the pilot's bounded motion,
+            // so steering cannot leave the foreground ship outside the frame.
+            b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
         } else {
             damp(&b.cameraPosition,velocity:&velocity,target:desired,frequency:7,dt:dt)
-            if event == .carrierArrival && carrierLaunchShot {
-                // Keep the small foreground subject centered while the dolly catches up.
+            if (event == .carrierArrival && carrierLaunchShot) || event == .handoff {
+                // Keep the launching squadron centered while the dolly catches up.
                 b.cameraLook = look; lookVelocity = .zero
             } else { damp(&b.cameraLook,velocity:&lookVelocity,target:look,frequency:9,dt:dt) }
         }
@@ -354,6 +423,7 @@ final class CinematicDirector {
 
 extension Dogfight {
     func cameraSubject() -> Fighter? {
+        if director.event == .handoff { return fighters[followedIndex].active ? fighters[followedIndex] : nil }
         guard director.event == .none || director.event == .spin else { return nil }
         return cameraIndex == 2 || !fighters[followedIndex].active ? nil : fighters[followedIndex]
     }

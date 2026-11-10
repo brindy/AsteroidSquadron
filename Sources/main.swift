@@ -404,6 +404,7 @@ final class Dogfight {
     var planet: ProceduralPlanet?
     var planetSunDirection = V3(0,0,1)
     var cameraAge: Float = 0
+    var viewportAspect: Float = 1.6
     var cameraIndex = 2
     var automatic = true
     var paused = false
@@ -991,6 +992,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         RunLoop.main.add(timer!,forMode:.common)
     }
     func tick() {
+        battle.viewportAspect = Float(view.bounds.width/max(1,view.bounds.height))
         let now = ProcessInfo.processInfo.systemUptime
         let dt = Float(min(0.08,now-lastTime)); lastTime = now
         SCNTransaction.begin(); SCNTransaction.animationDuration = 0
