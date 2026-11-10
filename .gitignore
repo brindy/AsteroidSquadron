@@ -1,3 +1,9 @@
 build/
 .cache/
 .DS_Store
+# Signing/notarization credentials belong in Keychain, never in the repository.
+*.p12
+*.p8
+*.keychain-db
+.env
+.env.*

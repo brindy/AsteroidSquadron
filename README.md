@@ -39,9 +39,15 @@ Actual swept asteroid impacts make a ship ricochet into an uncontrolled tumble, 
 
 The gas clouds use ray marching through three-dimensional procedural noise inside ellipsoidal volumes. They have depth and parallax as cameras and ships pass around them. Nine volumes with twenty density samples per ray keep the effect bounded; default rendering remains 30 fps.
 
+## Download
+
+See [GitHub Releases](https://github.com/brindy/AsteroidSquadron/releases) for published Mac builds. Use the Universal DMG, drag **Asteroid Squadron** into **Applications**, then launch it. Release downloads support Apple Silicon and Intel Macs on macOS 13 or newer. The release script signs with Developer ID, notarizes and staples the app and DMG, and publishes a ZIP alternative and SHA-256 checksums. GitHub Actions development artifacts are separate and are not notarized.
+
+Maintainers: see [the release guide](docs/RELEASING.md) for Keychain setup and the one-command release workflow.
+
 ## Run
 
-Double-click **Start Dogfight.command**, or open **build/Asteroid Squadron.app** after building. The launcher builds the app if needed; building requires Xcode Command Line Tools. The built app itself only needs macOS 13 or newer on the architecture it was built for.
+Double-click **Start Dogfight.command**, or open **build/Asteroid Squadron.app** after building. The launcher builds the app if needed; building requires Xcode Command Line Tools. The built app itself only needs macOS 13 or newer on the architecture it was built for. Use `./scripts/build.sh --universal` to build for both Apple Silicon and Intel. Version numbers come from `VERSION` and `BUILD_NUMBER`.
 
 ```sh
 ./scripts/build.sh
