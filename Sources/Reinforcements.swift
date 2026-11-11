@@ -65,6 +65,29 @@ extension Dogfight {
         }
     }
 
+    private func arrivalLane(for faction: Faction, side: Int) -> (origin: V3, forward: V3) {
+        let radial = unit(V3(planetPosition.x,0,planetPosition.z))
+        let tangent = unit(simd_cross(radial,V3(0,1,0)))
+        // The two fleets stage on opposite sides of the sightline to the planet.
+        let sign: Float = side == 0 ? -1 : 1
+        let distance: Float
+        let offset: Float
+        let course: Float
+        switch faction {
+        case .rebel: (distance,offset,course) = (1210,210,0.12)
+        case .earth: (distance,offset,course) = (1450,265,0.28)
+        case .colonial,.cylon: (distance,offset,course) = (2100,480,0.66)
+        // Keep the Shadow transit tangent to the belt so its departure window
+        // opens in clear space even when the whole carrier is on the move.
+        case .shadow: (distance,offset,course) = (2390,400,2.2)
+        default: (distance,offset,course) = (2340,450,1.2)
+        }
+        let origin = radial*distance+tangent*(sign*(offset+rng.range(-50,50)))
+            + V3(0,planetPosition.y*0.32+rng.range(120,200),0)
+        let forward = unit(-radial-tangent*course)
+        return (origin,forward)
+    }
+
     func deployReinforcements(side: Int, topUp: Bool = false) {
         let roster = fighters.indices.filter { fighters[$0].side == side }
         let squadron = topUp ? roster.filter { fighters[$0].state == .destroyed } : roster
@@ -77,24 +100,11 @@ extension Dogfight {
         let start = max(time,nextArrivalTime)
         nextArrivalTime = start+(faction == .shadow ? 7.2 : 6.5)
         waveNumber += 1
+        let (origin,heading) = arrivalLane(for:faction,side:side)
         if faction == .rebel {
-            // The complete V formation gets one collision-free entry corridor.
+            // The whole V can form up outside the rocks before splitting.
             let slots: [V3] = [V3(0,0,0),V3(-14,-1,-13),V3(14,-1,-13),V3(-28,-2,-26),V3(28,-2,-26),V3(0,8,-32)]
-            var origin = V3.zero, heading = V3(0,0,-1), right = V3(1,0,0)
-            for attempt in 0..<80 {
-                let a = rng.range(0,tau)
-                origin = V3(sin(a)*210,245+Float(attempt)*2,cos(a)*210)
-                heading = unit(V3(-origin.x,-65,-origin.z)); right = unit(simd_cross(heading,V3(0,1,0)))
-                let blocked = slots.contains { slot in
-                    let point = origin+right*slot.x+V3(0,slot.y,0)+heading*slot.z
-                    let segment = heading*95
-                    return rocks.contains { rock in
-                        let u = max(0,min(1,simd_dot(rock.position-point,segment)/simd_length_squared(segment)))
-                        return simd_distance(point+segment*u,rock.position)<rock.radius+17
-                    }
-                }
-                if !blocked { break }
-            }
+            let right = unit(simd_cross(heading,V3(0,1,0)))
             for (slot,index) in squadron.enumerated() {
                 let f = fighters[index], offset = slots[slot]
                 f.state = .arriving; f.entry = .hyperspace; f.entryTime = start+1.25
@@ -105,24 +115,14 @@ extension Dogfight {
             formationArrivals += 1
             director.arrivalFlight = ArrivalFlight(indices:squadron,origin:origin,forward:heading,start:start)
         } else {
-            var position = V3.zero
-            for _ in 0..<80 {
-                let a = rng.range(0,tau)
-                let distance: Float = faction == .earth ? 1450 : 3300
-                position = V3(sin(a)*distance,faction == .earth ? 600 : 900,cos(a)*distance)
-                let radius: Float = (faction == .shadow ? 210 : (faction == .cylon ? 158 : 130))*6
-                let clearOfCity = atlantis.map { simd_distance($0.position,position)>radius+Atlantis.shieldRadius+500 } ?? true
-                if clearOfCity && carriers.allSatisfy({simd_distance($0.origin,position)>2100}) && simd_distance(position,planetPosition)>radius+planetRadius+250 { break }
-            }
-            let direction = unit(-position)
-            let ship = Carrier(faction:faction,side:side,origin:position,forward:direction,start:start,squadron:squadron)
+            let ship = Carrier(faction:faction,side:side,origin:origin,forward:heading,start:start,squadron:squadron)
             carriers.append(ship)
             scene.rootNode.addChildNode(ship.node); scene.rootNode.addChildNode(ship.warp)
             for (slot,index) in squadron.enumerated() {
                 let f = fighters[index]
                 f.state = .arriving; f.entry = faction == .earth ? .jumpWindow : .hangar; f.entryTime = start+2.5+Float(slot)*0.35
                 f.entryPosition = ship.launchPosition(slot:slot,at:f.entryTime-start)
-                f.entryForward = direction; f.formationSlot = slot; f.arrival = 0
+                f.entryForward = heading; f.formationSlot = slot; f.arrival = 0
                 f.hitPoints = 6; f.cooldown = 1.2; f.warp.isHidden = true; f.collisionCooldown = 25
             }
         }
@@ -158,6 +158,27 @@ extension Dogfight {
         return true
     }
 
+    func blinkCapitalIn(_ ship: Carrier) {
+        guard !ship.blinkEntered else { return }
+        ship.blinkEntered = true; blinkArrivals += 1
+        jumpPulse(at:ship.origin,radius:ship.worldRadius*1.25)
+    }
+
+    func updateCapitalWarp(_ ship: Carrier, position: V3, length: Float) {
+        ship.warp.isHidden = length<1
+        ship.warp.simdPosition = position-ship.forward*length*0.5
+        ship.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:ship.forward)
+        ship.warp.simdScale = V3(ship.scale,ship.scale,max(1,length))
+    }
+
+    func capitalHyperspaceEntry(_ ship: Carrier, age: Float) -> V3 {
+        let t = age/ship.arrivalDuration
+        let position = ship.origin-ship.forward*2800*pow(1-t,4)
+        ship.node.isHidden = t<0.68
+        updateCapitalWarp(ship,position:position,length:(1-t)*1000)
+        return position
+    }
+
     func updateCarrier() {
         for i in carriers.indices.reversed() {
             let ship = carriers[i], age = time-ship.start
@@ -175,10 +196,7 @@ extension Dogfight {
                 if age<ship.arrivalDuration {
                     ship.node.isHidden = true
                 } else if age<ship.departureAge {
-                    if !ship.blinkEntered {
-                        ship.blinkEntered = true; blinkArrivals += 1
-                        jumpPulse(at:ship.origin,radius:ship.worldRadius*1.25)
-                    }
+                    blinkCapitalIn(ship)
                     ship.node.isHidden = false
                 } else {
                     if !ship.blinkExited {
@@ -191,10 +209,10 @@ extension Dogfight {
                 }
             } else {
                 if age<1.4 {
-                    let t = age/1.4
-                    position = ship.origin-ship.forward*2800*pow(1-t,4)
-                    ship.node.isHidden = t<0.68; beam = (1-t)*1000
-                } else if age>ship.departureAge {
+                    ship.node.simdPosition = capitalHyperspaceEntry(ship,age:age)
+                    continue
+                }
+                if age>ship.departureAge {
                     if !ship.departing {
                         ship.departing = true; carrierDepartures += 1
                         director.requestCarrierDeparture(ship,in:self)
@@ -203,10 +221,7 @@ extension Dogfight {
                     position += ship.forward*3000*pow(t,3)
                     ship.node.isHidden = t>0.7; beam = t*1500
                 } else { ship.node.isHidden = false }
-                ship.warp.isHidden = beam<1
-                ship.warp.simdPosition = position-ship.forward*beam*0.5
-                ship.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:ship.forward)
-                ship.warp.simdScale = V3(ship.scale,ship.scale,max(1,beam))
+                updateCapitalWarp(ship,position:position,length:beam)
             }
             ship.node.simdPosition = position
             let linger = ship.departureDuration

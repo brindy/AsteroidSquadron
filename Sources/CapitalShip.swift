@@ -44,13 +44,70 @@ func imperialCarrier() -> SCNNode {
     return root
 }
 
+func monCalamariCruiser() -> SCNNode {
+    let root = SCNNode()
+    let armor = material(color(0.53,0.48,0.39),metal:0.45)
+    let panels = material(color(0.36,0.35,0.32),metal:0.5)
+    let lights = material(color(0.57,0.78,1),emission:color(0.65,1.5,2.4))
+    func lobe(_ center: V3, _ axes: V3, _ surface: SCNMaterial) {
+        let body = node(SCNSphere(radius:1),surface,center)
+        body.simdScale = axes
+        root.addChildNode(body)
+    }
+    lobe(.zero,V3(36,21,127),armor)
+    lobe(V3(0,16,-44),V3(22,11,35),armor)
+    for side: Float in [-1,1] {
+        lobe(V3(side*29,0,23),V3(32,18,82),armor)
+        for row in 0..<5 {
+            let z = -34+Float(row)*23
+            lobe(V3(side*(26+Float(row%2)*8),13,z),V3(14,7,19),panels)
+            root.addChildNode(box(V3(2,1,6),lights,V3(side*43,15,z)))
+        }
+    }
+    for x: Float in [-38,-17,17,38] {
+        let z: Float = abs(x)>20 ? 96 : 106
+        root.addChildNode(cylinder(9,14,panels,V3(x,0,z)))
+        root.addChildNode(cylinder(7.5,2,lights,V3(x,0,z+8)))
+    }
+    return root
+}
+
+func omegaDestroyer() -> SCNNode {
+    let root = SCNNode()
+    let armor = material(color(0.48,0.49,0.50),metal:0.52)
+    let dark = material(color(0.14,0.17,0.21),metal:0.48)
+    let lights = material(color(0.36,0.63,1),emission:color(0.65,1.35,2.6))
+    root.addChildNode(armoredLoft([(-131,26,14,0),(-86,30,17,0),(-56,19,12,0),(82,20,13,0),(109,28,20,0),(127,26,18,0)],mat:armor))
+    root.addChildNode(box(V3(38,19,1.1),dark,V3(0,0,-131.2)))
+    root.addChildNode(box(V3(32,1.1,1.5),lights,V3(0,8,-132)))
+    let habitat = SCNNode()
+    habitat.addChildNode(cylinder(19,42,dark,V3(0,0,13)))
+    for side: Float in [-1,1] {
+        habitat.addChildNode(box(V3(34,25,39),armor,V3(side*33,0,13),chamfer:3))
+        habitat.addChildNode(box(V3(25,1,12),lights,V3(side*33,12.6,5)))
+        for y: Float in [-11,11] {
+            root.addChildNode(cylinder(9,10,dark,V3(side*15,y,127)))
+            root.addChildNode(cylinder(7,2,lights,V3(side*15,y,133)))
+        }
+    }
+    let spin = CABasicAnimation(keyPath:"rotation")
+    spin.fromValue = NSValue(scnVector4:SCNVector4(0,0,1,0))
+    spin.toValue = NSValue(scnVector4:SCNVector4(0,0,1,2*Double.pi))
+    spin.duration = 15; spin.repeatCount = .infinity
+    habitat.addAnimation(spin,forKey:"habitat-spin")
+    root.addChildNode(habitat)
+    return root
+}
+
 final class Carrier {
     let node: SCNNode
     let faction: Faction
     let side: Int
     let warp: SCNNode
     let jumpWindow: JumpWindow?
-    let jumpClipper: JumpClipper?
+    // Siege batteries attach to the model before the first transit frame.
+    private(set) lazy var jumpClipper: JumpClipper? =
+        faction.usesJumpWindow && (faction != .earth || squadron.isEmpty) ? JumpClipper(root:node) : nil
     let origin: V3
     let forward: V3
     let start: Float
@@ -66,7 +123,7 @@ final class Carrier {
     var blinkExited = false
     var arrivalDuration: Float { faction.usesJumpWindow ? 2.1 : (faction.usesBlinkFTL ? 0.85 : 1.4) }
     var cameraBounds: V3 {
-        switch faction { case .colonial: return V3(84,30,130); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return V3(37,37,1); case .tauri: return V3(73,36,145); case .goauld: return V3(106,74,106); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
+        switch faction { case .colonial: return V3(84,30,130); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return squadron.isEmpty ? V3(55,36,135) : V3(37,37,1); case .rebel: return V3(65,34,131); case .tauri: return V3(73,36,145); case .goauld: return V3(106,74,106); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
     }
     // The Imperial bridge is above the hull. Centering its exclusion volume at
     // the origin incorrectly blocked empty space beneath the launch bay.
@@ -92,8 +149,9 @@ final class Carrier {
     var framingScale: Float { (faction == .cylon ? 1.4 : (faction == .colonial ? 1.12 : 1))*scale }
     var worldRadius: Float { max(cameraBounds.x,max(cameraBounds.y,cameraBounds.z))*scale }
     init(faction: Faction = .empire, side: Int = 1, origin: V3, forward: V3, start: Float, squadron: [Int]) {
-        self.faction = faction; self.side = side; node = faction.capitalModel()
-        jumpClipper = faction == .shadow ? JumpClipper(root:node) : nil
+        self.faction = faction; self.side = side
+        let portalOnly = faction == .earth && !squadron.isEmpty
+        node = portalOnly ? SCNNode() : faction.capitalModel()
         self.origin = origin; self.forward = forward; self.start = start; self.squadron = squadron
         let modelRoot = node
         var corners = [V3]()
@@ -111,12 +169,12 @@ final class Carrier {
             let direction = V3(x,y,z)
             if direction != .zero, let point = corners.max(by:{simd_dot($0,direction)<simd_dot($1,direction)}), !silhouette.contains(point) { silhouette.append(point) }
         } } }
-        if faction == .earth {
+        if portalOnly {
             silhouette = [V3(-37,-37,0),V3(-37,37,0),V3(37,-37,0),V3(37,37,0)]
         }
         framingPoints = silhouette
         if faction.usesJumpWindow {
-            let window = JumpWindow(radius:faction == .earth ? 220 : 1250,forward:forward)
+            let window = JumpWindow(radius:portalOnly ? 220 : 1250,forward:forward)
             jumpWindow = window; warp = window.node
         } else {
             jumpWindow = nil

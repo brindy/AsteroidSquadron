@@ -122,7 +122,7 @@ extension Dogfight {
                 let impact = mix(from,to,fraction)
                 if let city = cityHit {
                     if city.shieldPoints==0 { burst(at:impact,count:6,big:false,scale:3) }
-                    hitAtlantis(city,at:impact)
+                    hitAtlantis(city,at:impact,damage:lasers[i].atlantisDamage)
                 } else {
                     burst(at:impact,count:4,big:false)
                 }

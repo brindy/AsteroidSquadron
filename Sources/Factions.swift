@@ -43,6 +43,13 @@ enum Faction: String, CaseIterable, Hashable {
         case .wraith: return "WRAITH HIVE SHIP"
         }
     }
+    var siegeCapitalName: String {
+        switch self {
+        case .rebel: return "MON CALAMARI CRUISER"
+        case .earth: return "OMEGA-CLASS DESTROYER"
+        default: return carrierName
+        }
+    }
     var usesBlinkFTL: Bool { self == .colonial || self == .cylon }
     var usesJumpWindow: Bool { self == .earth || self == .shadow }
     var usesCarrier: Bool { self != .rebel && self != .earth }
@@ -65,7 +72,8 @@ enum Faction: String, CaseIterable, Hashable {
         case .colonial: return battlestarGalactica()
         case .cylon: return cylonBasestar()
         case .shadow: return shadowCapital()
-        case .earth: return SCNNode()
+        case .earth: return omegaDestroyer()
+        case .rebel: return monCalamariCruiser()
         case .tauri: return daedalus()
         case .goauld: return goauldMothership()
         case .wraith: return wraithHive()

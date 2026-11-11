@@ -80,6 +80,7 @@ func verifyStargate(renderDirectory: URL? = nil) {
     let b = Dogfight(seed:7304,initialFactions:[.tauri,.wraith],initialArrivals:false,firstAtlantisEncounter:0)
     let city = b.atlantis!
     stargateCheck(simd_length(city.position)>2500,"Atlantis arrived inside the asteroid field")
+    stargateCheck(simd_dot(city.position,unit(b.planetPosition))>1000,"Atlantis did not arrive on the planet-facing side")
     stargateCheck(!b.fireAtAtlantis(from:0,city:city),"A fighter fired at Atlantis from the asteroid field")
     stargateCheck(!b.fire(from:0,to:1),"A squadron broke the siege truce")
     var rendered = Set<String>()
@@ -93,6 +94,14 @@ func verifyStargate(renderDirectory: URL? = nil) {
     var maxDrones = 0
     var destroyedTime: Float?
     var regroupDeadline: Float?
+    var assaultCuts = Set<CinematicDirector.Event>()
+    var assaultStartedAt: Float?
+    var maxSwarm = 0
+    var sawCapitalFire = false
+    var sawCapitalDamage = false
+    var previousShield = city.shieldPoints
+    var previousHull = city.hullPoints
+    var capitalBolts = 0
     for _ in 0..<14400 {
         b.update(dt:1.0/30)
         maxDrones = max(maxDrones,city.drones.count)
@@ -139,6 +148,29 @@ func verifyStargate(renderDirectory: URL? = nil) {
         }
         let event = b.director.event
         let age = b.director.eventAge
+        if let assault = city.assault {
+            if assaultStartedAt == nil {
+                assaultStartedAt = b.time
+                stargateCheck(city.shieldPoints<=Atlantis.assaultThreshold && city.shieldPoints>0,
+                              "Capital attack did not start during the low-shield window")
+                stargateCheck(b.sideFactions.contains(assault.ship.faction) && assault.ship.squadron.isEmpty,
+                              "An unrelated faction or extra fighter wave joined the siege")
+            }
+            maxSwarm = max(maxSwarm,assault.drones.count)
+            let bolts = b.lasers.filter { $0.targetsAtlantis && $0.atlantisDamage>1 }
+            if !bolts.isEmpty { sawCapitalFire = true }
+            if bolts.count<capitalBolts && (city.shieldPoints<previousShield || city.hullPoints<previousHull) {
+                sawCapitalDamage = true
+            }
+            capitalBolts = bolts.count
+            previousShield = city.shieldPoints
+            previousHull = city.hullPoints
+            switch event {
+            case .atlantisCapitalArrival,.atlantisBombardment,.atlantisCounterstrike,.atlantisCapitalDestroyed:
+                assaultCuts.insert(event)
+            default: break
+            }
+        }
         if city.intact && event == .none && b.fighters.contains(where:{$0.active && $0.spin == nil}) {
             longestOverview = max(longestOverview,b.cameraAge)
         }
@@ -153,7 +185,21 @@ func verifyStargate(renderDirectory: URL? = nil) {
                           "An Atlantis lookout lost its incoming fighter")
         }
         var shot: String?
-        if event == .atlantisArrival && age>1.0 { shot = "atlantis-arrival" }
+        if event == .atlantisArrival && age>1.0 {
+            let tangent = tan(Float(b.camera.camera!.fieldOfView)*Float.pi/360)
+            let planet = b.camera.simdConvertPosition(b.planetPosition,from:nil)
+            let station = b.camera.simdConvertPosition(city.position,from:nil)
+            stargateCheck(planet.z<station.z && abs(planet.y)<(-planet.z)*tangent &&
+                          abs(planet.x)<(-planet.z)*tangent*b.viewportAspect,
+                          "The arrival shot lost the planet behind Atlantis")
+            shot = "atlantis-arrival"
+        }
+        if event == .atlantisCapitalArrival && age>1.15 { shot = "atlantis-capital-arrival" }
+        if event == .atlantisBombardment && age>0.75 { shot = "atlantis-capital-bombardment" }
+        if event == .atlantisCounterstrike && age>0.75 && age<2 { shot = "atlantis-counterstrike-tower" }
+        if event == .atlantisCounterstrike && age>4.15 && age<4.4 { shot = "atlantis-counterstrike-pass" }
+        if event == .atlantisCounterstrike && age>6.5 && age<6.8 { shot = "atlantis-counterstrike-loop" }
+        if event == .atlantisCapitalDestroyed && age>0.72 { shot = "atlantis-capital-destroyed" }
         if event == .atlantisAttack && age>0.5 { shot = city.shieldPoints>0 ? "atlantis-attack" : "atlantis-hull-run" }
         if event == .atlantisBreach && age>1.0 { shot = "atlantis-shield-down" }
         if event == .atlantisDestruction && age>1.7 { shot = "atlantis-breakup" }
@@ -178,6 +224,18 @@ func verifyStargate(renderDirectory: URL? = nil) {
     }
     stargateCheck(replaced && maxDrones<=Atlantis.droneVolleySize && longestRange>2100,
                   "Siege did not produce multiple waves, bounded drones and long approaches")
+    stargateCheck(sawCapitalFire && sawCapitalDamage && assaultCuts.count==4,
+                  "The capital bombardment or counterstrike camera sequence did not play through")
+    if let assault = city.assault, let destroyed = assault.destroyedAt {
+        stargateCheck(destroyed-assault.ship.start<13 && assault.penetrations.allSatisfy { $0>=22 } &&
+                      maxSwarm>=90 && assault.launched==AtlantisAssault.droneCount,
+                      "The swarm did not hit the capital ship on three passes before a swift destruction")
+        stargateCheck(assault.finished && assault.ship.node.parent==nil && assault.ship.warp.parent==nil && assault.drones.isEmpty,
+                      "The defeated capital ship or its swarm leaked scene nodes")
+        print("PASS: \(assault.ship.faction.siegeCapitalName) bombarded Atlantis and was destroyed after \(String(format:"%.1f",destroyed-assault.ship.start))s, with a peak swarm of \(maxSwarm) drones.")
+    } else {
+        stargateCheck(false,"The capital ship survived the counterstrike")
+    }
     stargateCheck(volleySizes.count>=2 && volleySizes.dropLast().allSatisfy { $0==Atlantis.droneVolleySize },
                   "Atlantis did not repeat full drone volleys: \(volleySizes)")
     stargateCheck(lookoutViews.contains("OUTER PIER") &&
@@ -203,5 +261,39 @@ func verifyStargate(renderDirectory: URL? = nil) {
     stargateCheck(b.atlantisSiegeActive,"Atlantis could not return after the cooldown")
     print("PASS: \(volleySizes.count) drone volleys with 30 launches per completed volley and a ten-second pause. Peak active drones: \(maxDrones).")
     print("PASS: city shield breached at \(Int(breach!))s, city destroyed at \(Int(destroyedTime!))s, survivors returned, and ten encounters elapsed before eligibility.")
+
+    // In particular, two fleets that normally insert fighters directly still
+    // have their own capital hulls for the siege, with their native jump styles.
+    for faction: Faction in [.rebel,.earth,.colonial,.shadow] {
+        let battle = Dogfight(seed:7305,initialFactions:[faction,.wraith],initialArrivals:false,firstAtlantisEncounter:0)
+        let city = battle.atlantis!
+        for fighter in battle.fighters {
+            fighter.cooldown = 1000
+            if fighter.side==1 { fighter.state = .destroyed; fighter.node.isHidden = true }
+        }
+        battle.pendingSides.insert(1)
+        city.hitShield(at:city.position+V3(0,Atlantis.shieldRadius,0),
+                       damage:city.shieldPoints-Atlantis.assaultThreshold-1)
+        battle.update(dt:dt)
+        stargateCheck(city.assault == nil,"A capital ship attacked before the shields ran low")
+        battle.hitAtlantis(city,at:city.position+V3(0,Atlantis.shieldRadius,0))
+        battle.update(dt:dt)
+        let assault = city.assault!
+        stargateCheck(assault.ship.faction==faction && assault.ship.framingPoints.count>8,
+                      "The surviving faction did not deploy a real capital hull")
+        var sawWindow = false
+        for _ in 0..<960 {
+            battle.update(dt:dt)
+            if let window = assault.ship.jumpWindow, !window.node.isHidden && assault.ship.node.isHidden {
+                sawWindow = true
+            }
+            if assault.finished { break }
+        }
+        stargateCheck(assault.finished && assault.destroyedAt != nil && city.shieldPoints<Atlantis.assaultThreshold,
+                      "\(faction) did not fire real shield hits and succumb to the swarm")
+        stargateCheck(!faction.usesJumpWindow || sawWindow,"\(faction) skipped the opening jump window")
+        stargateCheck(!faction.usesBlinkFTL || assault.ship.blinkEntered,"The assault skipped blink FTL")
+    }
+    print("PASS: Rebel and Earth Alliance siege hulls, jump-window and blink arrivals, and capital-only shield hits.")
     fflush(stdout)
 }

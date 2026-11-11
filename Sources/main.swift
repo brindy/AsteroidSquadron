@@ -297,6 +297,7 @@ struct Laser {
     let length: Float
     var sourceIndex: Int? = nil
     var targetsAtlantis = false
+    var atlantisDamage = 1
 }
 struct Spark {
     enum Kind { case debris, ember, impact }
@@ -590,11 +591,11 @@ final class Dogfight {
         }
     }
     func makePlanet() {
-        planetRadius = rng.range(300,480)
+        planetRadius = rng.range(800,1080)
         _ = rng.range(0.5,1) // Keep the existing arena random stream stable.
         let variation = rng.range(-1.1,1.1)
         let a = atan2(-planetSunDirection.x,-planetSunDirection.z)+variation
-        planetPosition = V3(sin(a)*2400,rng.range(100,650),cos(a)*2400)
+        planetPosition = V3(sin(a)*4650,rng.range(210,1100),cos(a)*4650)
         let world = ProceduralPlanet(seed:seed,radius:planetRadius,sun:planetSunDirection)
         world.node.simdPosition = planetPosition
         scene.rootNode.addChildNode(world.node); planet = world
@@ -717,6 +718,7 @@ final class Dogfight {
     }
     func clearCamera(_ point: V3, insideAtlantisShield: Bool = false) -> V3 {
         var p = point
+        let activeCapitals = carriers+(atlantis?.assault.map { [$0.ship] } ?? [])
         for _ in 0..<3 {
             for rock in rocks {
                 let delta = p-rock.position, clearance = rock.radius+5
@@ -727,7 +729,7 @@ final class Dogfight {
                 let clearance: Float = f === cameraSubject() ? 17 : 10
                 if simd_length_squared(delta)<clearance*clearance { p = f.position+unit(delta)*clearance }
             }
-            for ship in carriers where !ship.node.isHidden {
+            for ship in activeCapitals where !ship.node.isHidden {
                 let transform = ship.node.simdWorldTransform
                 let inverse = transform.inverse
                 for (center,bounds) in ship.cameraVolumes {

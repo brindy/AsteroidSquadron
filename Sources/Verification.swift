@@ -344,6 +344,52 @@ private func verifyWeaponsAndMotion() {
     print("PASS: all nine models fire forwards from paired muzzles; physical hits and evasion; bounded, identical 30/60 fps flight; swept asteroid collision.")
 }
 
+private func verifyPlanetaryReveals() {
+    for (seed,aspect,side) in [(UInt64(42),Float(0.85),0),(7304,1.6,1),(1818,2,0)] {
+        for faction in Faction.allCases {
+            var factions: [Faction] = [.empire,.rebel]
+            factions[side] = faction
+            factions[1-side] = faction == .rebel ? .empire : .rebel
+            let b = Dogfight(seed:seed,initialFactions:factions,initialArrivals:false)
+            b.viewportAspect = aspect
+            for f in b.fighters { f.cooldown = 10000; f.collisionCooldown = 10000 }
+            for f in b.fighters where f.side == side { b.destroy(f) }
+            b.deployReinforcements(side:side)
+            let ship = b.carriers.first
+            let origin = ship?.origin ?? b.director.arrivalFlight!.origin
+            let planetDirection = unit(b.planetPosition)
+            let beltEdge = b.rocks.map { simd_length($0.position)+$0.radius }.max()!
+            let depth = simd_dot(origin,planetDirection)
+            check(depth>beltEdge && depth<simd_length(b.planetPosition)-b.planetRadius,
+                  "\(faction) arrived outside the planet-facing gap")
+            for f in b.fighters where f.side == side {
+                let end = f.entryPosition+f.entryForward*f.entrySpeed*f.formationHold
+                check(!b.rocks.contains { sphereImpact(from:f.entryPosition,to:end,center:$0.position,
+                                                        radius:$0.radius+f.faction.collisionRadius) != nil },
+                      "\(faction) formation or launch corridor intersects an asteroid")
+            }
+            for _ in 0..<18 { b.update(dt:1.0/60) }
+            let wide = Float(b.camera.camera!.fieldOfView)
+            for _ in 18..<106 { b.update(dt:1.0/60) }
+            let tight = Float(b.camera.camera!.fieldOfView)
+            let tangent = tan(tight*Float.pi/360)
+            func framed(_ point: V3) -> Bool {
+                let p = b.camera.simdConvertPosition(point,from:nil)
+                return p.z < -1 && abs(p.y)<(-p.z)*tangent && abs(p.x)<(-p.z)*tangent*aspect
+            }
+            let points = ship.map { carrier in
+                carrier.framingPoints.map { carrier.origin+carrier.node.simdOrientation.act($0*carrier.scale) }
+            } ?? b.fighters.filter { $0.side == side }.map(\.position)
+            check(points.allSatisfy(framed) && framed(b.planetPosition),
+                  "\(faction) reveal lost the arriving ships or the planet at aspect \(aspect)")
+            if faction.usesBlinkFTL || faction == .rebel {
+                check(wide-tight>7,"\(faction) reveal did not tighten its lens in response to arrival")
+            }
+        }
+    }
+    print("PASS: all nine factions arrive in clear lanes between the belt and planet; planetary reveals fit three window shapes; the lens reacts to blink and formation arrivals.")
+}
+
 private func verifyContinuousDeployments() {
   for aspect: Float in [1.0,1.6,2.0] {
     for faction in [Faction.empire,.colonial,.cylon,.shadow,.tauri,.goauld,.wraith] {
@@ -456,6 +502,7 @@ func verifySimulation() {
     verifyBattlefieldFraming()
     verifyShipTraffic()
     verifyWeaponsAndMotion()
+    verifyPlanetaryReveals()
     verifyContinuousDeployments()
     verifyFactionLifecycle()
     verifyBlinkCarriers()
@@ -696,6 +743,7 @@ func renderReview(directory: URL) {
         switch battle.director.event {
         case .formation:
             if age>0.95 && age<1.05 { name = "formation-hyperspace" }
+            if age>1.52 && age<1.6 { name = "formation-planet" }
             if age>2.5 && age<2.6 { name = "formation-held" }
             if age>4.7 && age<4.8 { name = "formation-break" }
         case .carrierArrival:

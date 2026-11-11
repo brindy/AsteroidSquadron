@@ -10,6 +10,8 @@ final class Atlantis {
     static let droneLaunchInterval: Float = 0.05
     static let droneVolleyPause: Float = 10
     static let towerTip: Float = 190
+    static let revealDelay: Float = 0.48
+    static let assaultThreshold = shieldCapacity*18/100
 
     let node = SCNNode()
     let city = SCNNode()
@@ -28,6 +30,7 @@ final class Atlantis {
     var nextExplosion = 0
     var impactStrength: Float = 0
     var drones: [AncientDrone] = []
+    var assault: AtlantisAssault?
 
     init(position: V3, time: Float, seed: UInt64) {
         self.position = position
@@ -195,8 +198,8 @@ final class Atlantis {
         return position+right*across+V3(0,height,0)
     }
 
-    func hitShield(at point: V3) {
-        shieldPoints -= 1
+    func hitShield(at point: V3, damage: Int) {
+        shieldPoints = max(0,shieldPoints-damage)
         impactStrength = 1
         shieldMaterial.setValue(SCNVector3(unit(point-position)),forKey:"impactDirection")
         shieldMaterial.setValue(Float(shieldPoints)/Float(Self.shieldCapacity),forKey:"integrity")
@@ -276,11 +279,17 @@ final class AncientDrone {
     init(path: AncientDronePath) {
         self.path = path
         position = path.origin
-        node = SCNNode()
-        node.addChildNode(cylinder(1.05,4.8,Self.glow))
-        node.addChildNode(segment(V3(0,0,2),V3(0,0,22),radius:0.42,mat:Self.trail))
+        node = Self.makeNode()
         node.simdPosition = position
         node.simdOrientation = simd_quatf(from:V3(0,0,-1),to:V3(0,1,0))
+    }
+
+    static func makeNode(scale: Float = 1) -> SCNNode {
+        let node = SCNNode()
+        node.addChildNode(cylinder(1.05,4.8,Self.glow))
+        node.addChildNode(segment(V3(0,0,2),V3(0,0,22),radius:0.42,mat:Self.trail))
+        node.simdScale = V3(repeating:scale)
+        return node
     }
 }
 
@@ -290,22 +299,20 @@ extension Dogfight {
 
     func startAtlantisSiege() {
         guard atlantis == nil, !returningFromAtlantis else { return }
-        // Opposite the planet and clear of both the belt and incoming ships.
-        let away = unit(V3(-planetPosition.x,0,-planetPosition.z))
-        let initialAngle = rng.range(-0.45,0.45)
-        var arrival = V3.zero
-        for attempt in 0..<16 {
-            let turn = initialAngle+Float(attempt)*tau/16
-            let direction = simd_quatf(angle:turn,axis:V3(0,1,0)).act(away)
-            arrival = direction*2780+V3(0,530,0)
-            let clearance = Atlantis.shieldRadius+160
-            let clearOfFighters = fighters.allSatisfy { !$0.active || simd_distance($0.position,arrival)>clearance }
-            if clearOfFighters && simd_distance(planetPosition,arrival)>planetRadius+clearance { break }
-        }
+        // Stage off to one side of the planet-facing gap so later fighter
+        // deployments can still use the lanes on either side of the sightline.
+        let towardPlanet = unit(V3(planetPosition.x,0,planetPosition.z))
+        let angle = rng.range(0.99,1.13)
+        let direction = simd_quatf(angle:angle,axis:V3(0,1,0)).act(towardPlanet)
+        let station = direction*2850+V3(0,530,0)
+        let clearance = Atlantis.shieldRadius+160
+        let arrival = (0...5).map { station+V3(0,Float($0)*320,0) }.first { point in
+            fighters.allSatisfy { !$0.active || simd_distance($0.position,point)>clearance }
+        } ?? station+V3(0,1920,0)
         let city = Atlantis(position:arrival,time:time,seed:seed &+ UInt64(encountersCompleted))
         atlantis = city
+        city.node.opacity = 0
         scene.rootNode.addChildNode(city.node)
-        jumpPulse(at:city.position,radius:Atlantis.shieldRadius*1.5)
         for shot in lasers { shot.node.removeFromParentNode() }
         lasers.removeAll(keepingCapacity:true)
         for fighter in fighters {
@@ -337,16 +344,16 @@ extension Dogfight {
         return city.aimPoint(for:fighter)
     }
 
-    func hitAtlantis(_ city: Atlantis, at point: V3) {
+    func hitAtlantis(_ city: Atlantis, at point: V3, damage: Int = 1) {
         if city.shieldPoints>0 {
-            city.hitShield(at:point)
+            city.hitShield(at:point,damage:damage)
             if city.shieldPoints==0 {
                 jumpPulse(at:city.position,radius:Atlantis.shieldRadius*1.35)
-                if automatic { director.begin(.atlantisBreach,in:self) }
+                if automatic && city.assault?.finished != false { director.begin(.atlantisBreach,in:self) }
             }
             return
         }
-        city.hullPoints -= 1
+        city.hullPoints -= min(3,damage)
         if city.hullPoints<=0 {
             city.destroyedAt = time
             returningFromAtlantis = true
@@ -355,6 +362,7 @@ extension Dogfight {
             for drone in city.drones { drone.node.removeFromParentNode() }
             city.drones.removeAll()
             city.droneVolley = nil
+            city.assault?.removeNodes()
             for fighter in fighters {
                 fighter.patrolRoute.removeAll(keepingCapacity:true)
                 fighter.atlantisEgress = nil
@@ -381,9 +389,16 @@ extension Dogfight {
             if let destroyedAt = city.destroyedAt {
                 updateAtlantisDestruction(city,age:time-destroyedAt,dt:dt)
             } else {
-                city.node.opacity = CGFloat(min(1,(time-city.arrivalTime)/0.65))
+                let arrivalAge = time-city.arrivalTime-Atlantis.revealDelay
+                if arrivalAge>=0 && arrivalAge<dt {
+                    jumpPulse(at:city.position,radius:Atlantis.shieldRadius*1.5)
+                }
+                city.node.opacity = CGFloat(min(1,max(0,arrivalAge/0.23)))
                 city.updateShield(dt)
-                if dt>0 { updateAncientDrones(city,dt:dt,starts:starts,wasActive:wasActive) }
+                if dt>0 {
+                    updateAtlantisAssault(city,dt:dt)
+                    updateAncientDrones(city,dt:dt,starts:starts,wasActive:wasActive)
+                }
             }
         }
         guard returningFromAtlantis, atlantis == nil, arrivingCount==0,
@@ -423,6 +438,7 @@ extension Dogfight {
     private func launchAncientDroneIfReady(_ city: Atlantis) {
         guard time>=city.nextDroneTime else { return }
         if city.droneVolley == nil {
+            guard city.assault?.finished != false else { return }
             let targets = fighters.indices.filter { fighters[$0].active && city.distanceToSurface(from:fighters[$0].position)<355 }
             guard !targets.isEmpty else { return }
             let index = targets[rng.index(targets.count)]

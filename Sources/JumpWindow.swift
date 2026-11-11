@@ -56,6 +56,18 @@ final class JumpWindow {
 }
 
 extension Dogfight {
+    func emergeThroughJumpWindow(_ ship: Carrier, age: Float, window: JumpWindow) -> V3 {
+        let radius = ship.worldRadius
+        let travel = max(0,min(1,(age-0.85)/1.25))
+        let position = ship.origin-ship.forward*(radius*2.6*(1-travel))
+        ship.node.isHidden = age<0.85
+        let portal = ship.origin-ship.forward*radius*0.75
+        window.update(time:time,position:portal,openness:min(age/0.85,(2.4-age)/0.3))
+        if age<ship.arrivalDuration { ship.jumpClipper?.setPlane(origin:portal,normal:ship.forward) }
+        else { ship.jumpClipper?.clear() }
+        return position
+    }
+
     func updateJumpWindow(_ ship: Carrier, age: Float) -> V3 {
         guard let window = ship.jumpWindow else { return ship.origin }
         if ship.faction == .earth {
@@ -73,14 +85,7 @@ extension Dogfight {
         let departureOpening = ship.departureAge-0.65
         var position = ship.origin
         if age<2.4 {
-            let travel = max(0,min(1,(age-0.85)/1.25))
-            position -= ship.forward*(radius*2.6*(1-travel))
-            ship.node.isHidden = age<0.85
-            let open = min(age/0.85,(2.4-age)/0.3)
-            let portal = ship.origin-ship.forward*radius*0.75
-            window.update(time:time,position:portal,openness:open)
-            if age<ship.arrivalDuration { ship.jumpClipper?.setPlane(origin:portal,normal:ship.forward) }
-            else { ship.jumpClipper?.clear() }
+            return emergeThroughJumpWindow(ship,age:age,window:window)
         } else if age<departureOpening {
             ship.jumpClipper?.clear()
             ship.node.isHidden = false

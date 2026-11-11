@@ -22,6 +22,7 @@ final class CinematicDirector {
     enum Event {
         case none, formation, carrierArrival, carrierDeparture, handoff, spin, attack, explosion
         case atlantisArrival, atlantisAttack, atlantisDefense, atlantisBreach, atlantisDestruction
+        case atlantisCapitalArrival, atlantisBombardment, atlantisCounterstrike, atlantisCapitalDestroyed
     }
     var event: Event = .none
     var eventAge: Float = 0
@@ -105,6 +106,15 @@ final class CinematicDirector {
             caption = "ATLANTIS DEFENSE"; detail = "TRACKING INCOMING FIGHTERS"
         case .atlantisBreach:
             caption = "SHIELD COLLAPSE"; detail = "ATLANTIS HULL EXPOSED"
+        case .atlantisCapitalArrival:
+            caption = b.atlantis?.assault?.ship.faction.siegeCapitalName
+            detail = "CAPITAL SHIP INBOUND / ATLANTIS UNDER SIEGE"
+        case .atlantisBombardment:
+            caption = "CAPITAL BOMBARDMENT"; detail = "HEAVY BATTERIES FIRING ON ATLANTIS"
+        case .atlantisCounterstrike:
+            caption = "ANCIENT DRONE COUNTERSTRIKE"; detail = "SWARM LAUNCHING FROM THE CENTRAL TOWER"
+        case .atlantisCapitalDestroyed:
+            caption = "CAPITAL SHIP DESTROYED"; detail = b.atlantis?.assault?.ship.faction.siegeCapitalName
         case .atlantisDestruction:
             caption = "ATLANTIS DESTROYED"; detail = "SURVIVORS RETURNING TO THE BELT"
         case .none:
@@ -115,13 +125,13 @@ final class CinematicDirector {
         b.cameraChanged?()
     }
     func requestCarrierArrival(_ ship: Carrier, in b: Dogfight) {
-        if b.automatic {
+        if b.automatic && b.atlantis?.assault?.finished != false {
             rememberIncomingSquadron(ship,in:b)
             featuredCarrier = ship; begin(.carrierArrival,in:b)
         }
     }
     func requestCarrierDeparture(_ ship: Carrier, in b: Dogfight) {
-        guard b.automatic else { return }
+        guard b.automatic, b.atlantis?.assault?.finished != false else { return }
         // Keep the arrival camera and its shot clock through the same departure beat.
         if featuredCarrier === ship && event == .carrierArrival {
             caption = ship.faction == .earth ? "JUMP POINT CLOSING" : (ship.faction.usesBlinkFTL ? "FTL JUMP" : "JUMP TO HYPERSPACE")
@@ -313,10 +323,13 @@ final class CinematicDirector {
             var best = -Float.infinity
             // Establish from an open side of the asteroid cluster so the hulls
             // are readable instead of hidden behind a foreground boulder.
-            for step in 0..<16 {
+            let planetDirection = unit(V3(center.x-b.planetPosition.x,0,center.z-b.planetPosition.z))
+            let count = b.automatic ? 19 : 16
+            for step in 0..<count {
                 let a = b.time*0.026+Float(step%8)*tau/8
                 let elevation: Float = step<8 ? 0.65 : 1.5
-                let direction = unit(b.arenaRotation.act(V3(sin(a)*0.8,elevation,cos(a)*0.8)))
+                let direction = step<16 ? unit(b.arenaRotation.act(V3(sin(a)*0.8,elevation,cos(a)*0.8)))
+                    : unit(planetDirection+V3(0,Float(step-17)*0.17,0))
                 let point = center+direction*distance
                 let visible = group.reduce(Float(0)) { total,f in
                     let blocked = b.rocks.contains { sphereImpact(from:point,to:f.position,center:$0.position,radius:$0.radius) != nil }
@@ -329,7 +342,9 @@ final class CinematicDirector {
                     guard simd_dot(offset,view)>0, d<distance*1.2, simd_dot(unit(offset),view)>0.6 else { return total }
                     return total+min(3,rock.radius*rock.radius/max(1,d*d)*30)
                 }
-                let score = visible-foreground
+                let planetAngle = simd_dot(unit(b.planetPosition-point),view)
+                let backdrop: Float = step>=16 && planetAngle>0.95 ? 0.65 : 0
+                let score = visible-foreground+backdrop
                 if score>best { best = score; overviewDirection = direction }
             }
         }
@@ -345,6 +360,102 @@ final class CinematicDirector {
         velocity = (velocity-temp*frequency)*e
         value = target+(offset+temp)*e
     }
+
+    private func planetaryReveal(origin: V3, subject: V3, points: [V3], distance: Float,
+                                 age: Float, cue: Float, elevation: Float = 0.24, in b: Dogfight)
+        -> (position: V3, look: V3, fov: Float, roll: Float) {
+        let up = V3(0,1,0)
+        let outward = unit(b.planetPosition-origin)
+        let right = unit(simd_cross(outward,up))
+        let lateral = simd_dot(origin,right)>0 ? -right : right
+        let range = distance/max(0.58,min(1,b.viewportAspect))
+        let position = origin+range*(-outward+lateral*0.32+up*elevation)-lateral*distance*0.028*age
+        let shipSightline = unit(subject-position)
+        let planetSightline = unit(b.planetPosition-position)
+        // The operator holds the wide frame until the jump, pans a beat late,
+        // then briefly overshoots before settling on the arriving ship.
+        let reaction = max(0,age-cue-0.08)
+        let zoom = 1-exp(-reaction*reaction*52)
+        let correction = sin(reaction*15)*exp(-reaction*6)
+        let aim = unit(mix(shipSightline,planetSightline,0.43-zoom*0.14)
+                       + lateral*correction*0.04+up*correction*0.025)
+        let roll = correction*0.037
+        let screenRight = simd_quatf(angle:roll,axis:aim).act(unit(simd_cross(aim,up)))
+        let screenUp = simd_cross(screenRight,aim)
+        // Allow the limb to extend beyond frame while keeping the hull, gate,
+        // and enough of the planet's disc to read as three separate depths.
+        let radius = b.planetRadius*0.68
+        let backdrop = [b.planetPosition+screenUp*radius,b.planetPosition-screenUp*radius,
+                        b.planetPosition+screenRight*radius,b.planetPosition-screenRight*radius]
+        let tangent = (points+backdrop).reduce(Float(0)) { extent,point in
+            let delta = point-position
+            let depth = max(1,simd_dot(delta,aim))
+            let reach = max(abs(simd_dot(delta,screenUp)),abs(simd_dot(delta,screenRight))/b.viewportAspect)
+            return max(extent,reach/depth)
+        }
+        let fitted = atan(tangent*1.12)*360/Float.pi
+        let fov = max(fitted,36)+12*(1-zoom)
+        return (position,position+aim*range,fov,roll)
+    }
+
+    private func carrierReveal(_ ship: Carrier, age: Float, in b: Dogfight)
+        -> (position: V3, look: V3, fov: Float, roll: Float) {
+        var subject = ship.origin
+        var points = ship.framingPoints.map { ship.origin+ship.node.simdOrientation.act($0*ship.scale) }
+        var distance = max(950,ship.worldRadius*1.7)
+        var cue: Float = ship.faction.usesBlinkFTL ? ship.arrivalDuration : 0.96
+        if let window = ship.jumpWindow {
+            let portal = window.node.simdPosition
+            let right = unit(simd_cross(ship.forward,V3(0,1,0)))
+            let radius = window.radius*0.87
+            for x: Float in [-1,1] { for y: Float in [-1,1] {
+                points.append(portal+right*x*radius+V3(0,y*radius,0))
+            } }
+            subject = mix(portal,ship.origin,0.4)
+            distance = max(710,window.radius*2.15)
+            cue = ship.jumpClipper == nil ? 0.38 : 1.4
+        }
+        return planetaryReveal(origin:ship.origin,subject:subject,points:points,distance:distance,age:age,cue:cue,in:b)
+    }
+
+    private func atlantisReveal(_ city: Atlantis, age: Float, in b: Dogfight)
+        -> (position: V3, look: V3, fov: Float, roll: Float) {
+        let up = V3(0,1,0)
+        let shieldRadius = Atlantis.shieldRadius
+        var points = [city.position+up*shieldRadius,city.position-up*shieldRadius]
+        for step in 0..<12 {
+            let angle = Float(step)*tau/12
+            points.append(city.position+V3(sin(angle),0,cos(angle))*shieldRadius)
+        }
+        return planetaryReveal(origin:city.position,subject:city.position+up*72,points:points,
+                               distance:1480,age:age,cue:Atlantis.revealDelay,
+                               elevation:0.40+min(1,age/4.8)*0.20,in:b)
+    }
+
+    private func assaultFrame(_ assault: AtlantisAssault, city: Atlantis, in b: Dogfight)
+        -> (position: V3, look: V3, fov: Float) {
+        let ship = assault.ship
+        let up = V3(0,1,0)
+        let right = unit(simd_cross(ship.forward,up))
+        let width = max(0.65,min(1,b.viewportAspect/1.45))
+        switch event {
+        case .atlantisBombardment:
+            let focus = mix(city.position,ship.origin,0.54)+up*36
+            return (focus+right*2490/width+up*590-ship.forward*110,focus,59)
+        case .atlantisCounterstrike where eventAge<2.05:
+            let port = city.dronePort
+            return (port+ship.forward*82+right*117+up*79, mix(port,ship.origin,0.19)+up*59,57)
+        case .atlantisCounterstrike:
+            let focus = ship.origin+ship.forward*180+up*52
+            let offset = unit(ship.forward*0.88+right*0.42+up*0.28)
+            return (focus+offset*(ship.worldRadius*2.05+410)/width,focus,57)
+        default:
+            let focus = ship.node.simdPosition
+            let offset = unit(ship.forward*0.63+right*0.85+up*0.30)
+            return (focus+offset*(ship.worldRadius*1.86+150+eventAge*83)/width,focus,53)
+        }
+    }
+
     func carrierLaunchFrame(_ ship: Carrier, in b: Dogfight) -> (position: V3, look: V3) {
         let age = b.time-ship.start
         let up = ship.node.simdOrientation.act(V3(0,1,0))
@@ -398,7 +509,8 @@ final class CinematicDirector {
     func update(_ dt: Float, in b: Dogfight) {
         eventAge += dt; shake *= exp(-dt*8)
         if !b.automatic && event != .none { begin(.none,in:b) }
-        if b.automatic, let flight = arrivalFlight, flight.start>coveredFlight, b.time>=flight.start, b.time-flight.start<1.1 {
+        if b.automatic, b.atlantis?.assault?.finished != false, let flight = arrivalFlight,
+           flight.start>coveredFlight, b.time>=flight.start, b.time-flight.start<1.1 {
             coveredFlight = flight.start; begin(.formation,in:b)
         }
         if event == .none && b.automatic && b.cameraIndex != 2 && b.cameraAge>shotLength { endEvent(in:b) }
@@ -407,14 +519,33 @@ final class CinematicDirector {
         let up = V3(0,1,0)
         var desired = b.cameraPosition, look = b.cameraLook
         var fov: Float = 51
+        var roll: Float = 0
+        var revealingArrival = false
+        var trackingFormation = false
         if event == .formation, let flight = arrivalFlight {
             let age = b.time-flight.start
             let right = unit(simd_cross(flight.forward,up))
-            let advance = max(0,min(2.5,age-1.25))*28
-            let anchor = flight.origin+flight.forward*advance
-            let pan = min(1,max(0,(age-3.1)/1.8))
-            desired = anchor+right*(28+pan*70)+up*(32+pan*3)+flight.forward*(95-pan*115)
-            look = anchor-flight.forward*14; fov = 49
+            let closeAt: Float = 1.8
+            if age<closeAt {
+                let points = flight.indices.map { b.fighters[$0].entryPosition }
+                let anchor = flight.origin+flight.forward*max(0,age-1.25)*28
+                (desired,look,fov,roll) = planetaryReveal(origin:flight.origin,subject:anchor,points:points,
+                    distance:285,age:age,cue:1.14,in:b)
+                revealingArrival = true
+            } else {
+                if age-dt<closeAt { b.cut = true }
+                let squadron = flight.indices.map { b.fighters[$0] }.filter(\.active)
+                guard !squadron.isEmpty else { endEvent(in:b); update(0,in:b); return }
+                let anchor = squadron.reduce(V3.zero) { $0+$1.position }/Float(squadron.count)
+                let lead = squadron.reduce(V3.zero) { $0+$1.velocity }/Float(squadron.count)
+                let spread = squadron.map { simd_distance($0.position,anchor) }.max() ?? 0
+                let pan = min(1,max(0,(age-3.1)/1.8))
+                let offset = right*(28+pan*70)+up*(32+pan*3)+flight.forward*(95-pan*115)
+                let range = max(simd_length(offset),spread*2.8/max(0.65,min(1,b.viewportAspect)))
+                desired = anchor+unit(offset)*range+lead*(Float(2)/7)
+                look = anchor; fov = 49
+                trackingFormation = true
+            }
             if age>5.4 { endEvent(in:b,follow:flight.indices.first); update(0,in:b); return }
         } else if event == .carrierArrival || event == .carrierDeparture, let ship = b.carrier {
             let age = b.time-ship.start, right = unit(simd_cross(ship.forward,up))
@@ -430,18 +561,8 @@ final class CinematicDirector {
                     let frame = carrierLaunchFrame(ship,in:b)
                     desired = frame.position; look = frame.look; fov = 52
                 } else {
-                    let reveal = min(1,max(0,age-ship.arrivalDuration))
-                    if let window = ship.jumpWindow {
-                        let portal = window.node.simdPosition
-                        let focus = ship.faction == .earth ? portal : mix(portal,anchor,min(1,max(0,(age-1.2)/0.9))*0.5)
-                        let outward = unit(ship.forward*2.2+right*0.7+up*0.4)
-                        desired = focus+outward*window.radius*2.9/max(0.65,min(1,b.viewportAspect))
-                        look = focus
-                    } else {
-                        desired = anchor+(right*(220-reveal*12)+up*85+ship.forward*180)*framing
-                        look = anchor
-                    }
-                    fov = 50
+                    (desired,look,fov,roll) = carrierReveal(ship,age:age,in:b)
+                    revealingArrival = true
                 }
                 if age>ship.departureAge+ship.departureDuration {
                     if !startArrivalHandoff(in:b) { endEvent(in:b,follow:ship.squadron.first) }
@@ -464,12 +585,34 @@ final class CinematicDirector {
                 endEvent(in:b); update(0,in:b); return
             }
             desired = frame.position; look = frame.look; fov = frame.fov
+        } else if event == .atlantisCapitalArrival {
+            guard let assault = b.atlantis?.assault, !assault.finished else {
+                endEvent(in:b); update(0,in:b); return
+            }
+            (desired,look,fov,roll) = carrierReveal(assault.ship,age:b.time-assault.ship.start,in:b)
+            revealingArrival = true
+        } else if event == .atlantisBombardment || event == .atlantisCounterstrike || event == .atlantisCapitalDestroyed {
+            guard let city = b.atlantis, let assault = city.assault, !assault.finished else {
+                endEvent(in:b); update(0,in:b); return
+            }
+            if event == .atlantisCounterstrike && eventAge>=2.05 && eventAge-dt<2.05 {
+                b.cut = true
+                detail = "DRONES MAKING REPEATED PASSES THROUGH THE HULL"
+                b.cameraChanged?()
+            }
+            let frame = assaultFrame(assault,city:city,in:b)
+            desired = frame.position; look = frame.look; fov = frame.fov
         } else if event == .atlantisArrival || event == .atlantisBreach || event == .atlantisDestruction {
             guard let city = b.atlantis, eventAge<4.8 else {
                 endEvent(in:b); update(0,in:b); return
             }
-            let frame = atlantisFrame(city,in:b,progress:eventAge/4.8)
-            desired = frame.position; look = frame.look; fov = frame.fov
+            if event == .atlantisArrival {
+                (desired,look,fov,roll) = atlantisReveal(city,age:b.time-city.arrivalTime,in:b)
+                revealingArrival = true
+            } else {
+                let frame = atlantisFrame(city,in:b,progress:eventAge/4.8)
+                desired = frame.position; look = frame.look; fov = frame.fov
+            }
         } else if event == .atlantisDefense {
             guard b.atlantisSiegeActive, eventAge<4.2, let shot = atlantisLookout else {
                 endEvent(in:b); update(0,in:b); return
@@ -558,7 +701,7 @@ final class CinematicDirector {
                 fov = max(46,min(65,40+spacing*0.13))
             }
         }
-        let fromAtlantis = event == .atlantisDefense
+        let fromAtlantis = event == .atlantisDefense || (event == .atlantisCounterstrike && eventAge<2.05)
         desired = b.clearCamera(desired,insideAtlantisShield:fromAtlantis)
         if b.cut {
             hardCuts += 1
@@ -569,17 +712,18 @@ final class CinematicDirector {
             b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
         } else {
             damp(&b.cameraPosition,velocity:&velocity,target:desired,frequency:7,dt:dt)
-            if (event == .carrierArrival && carrierLaunchShot) || event == .handoff {
-                // Keep the launching squadron centered while the dolly catches up.
+            if (event == .carrierArrival && carrierLaunchShot) || revealingArrival || trackingFormation {
+                // The launch and reveal shots compute their aim from the framing.
                 b.cameraLook = look; lookVelocity = .zero
             } else { damp(&b.cameraLook,velocity:&lookVelocity,target:look,frequency:9,dt:dt) }
         }
         b.cameraPosition = b.clearCamera(b.cameraPosition,insideAtlantisShield:fromAtlantis)
         let jitter = V3(sin(b.time*71),cos(b.time*59),sin(b.time*53))*shake*0.14
         b.camera.simdPosition = b.cameraPosition+jitter
-        b.camera.look(at:SCNVector3(b.cameraLook),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
+        let cameraUp = roll == 0 ? up : simd_quatf(angle:roll,axis:unit(b.cameraLook-b.cameraPosition)).act(up)
+        b.camera.look(at:SCNVector3(b.cameraLook),up:SCNVector3(cameraUp),localFront:SCNVector3(0,0,-1))
         let old = Float(b.camera.camera!.fieldOfView)
-        b.camera.camera!.fieldOfView = CGFloat(b.cut ? fov : old+(fov-old)*(1-exp(-dt*2)))
+        b.camera.camera!.fieldOfView = CGFloat(b.cut || revealingArrival ? fov : old+(fov-old)*(1-exp(-dt*2)))
         b.cut = false
     }
 }
