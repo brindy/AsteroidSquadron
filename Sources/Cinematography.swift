@@ -8,8 +8,21 @@ struct ArrivalFlight {
     let start: Float
 }
 
+struct AtlantisLookout {
+    let index: Int
+    let generation: Int
+    let position: V3
+    let slide: V3
+    let launchFocus: V3?
+}
+
 final class CinematicDirector {
-    enum Event { case none, formation, carrierArrival, carrierDeparture, handoff, spin, attack, explosion }
+    static let atlantisWideDuration: Float = 3.4
+
+    enum Event {
+        case none, formation, carrierArrival, carrierDeparture, handoff, spin, attack, explosion
+        case atlantisArrival, atlantisAttack, atlantisDefense, atlantisBreach, atlantisDestruction
+    }
     var event: Event = .none
     var eventAge: Float = 0
     var arrivalFlight: ArrivalFlight?
@@ -49,6 +62,9 @@ final class CinematicDirector {
     var normalCuts = 0
     var hardCuts = 0
     var lastDangerTime: Float = -20
+    var atlantisLookout: AtlantisLookout?
+    private var nextAtlantisPier = false
+    private var favorAtlantisLookout = true
     var caption: String?
     var detail: String?
     init(seed: UInt64) { rng = Random(state:seed ^ 0xC1AE_AA77) }
@@ -77,8 +93,23 @@ final class CinematicDirector {
             caption = "HOT PURSUIT"; detail = "CRITICAL ATTACK RUN / TARGET UNDER FIRE"; attackCuts += 1
         case .explosion:
             caption = "FIGHTER DESTROYED"; detail = "COMBAT LOSS / EXPLOSION TRACKING"; explosionCuts += 1
+        case .atlantisArrival:
+            favorAtlantisLookout = true
+            nextAtlantisPier = false
+            caption = "ATLANTIS ARRIVES"; detail = "CITY SHIP / SQUADRONS DIVERTING"
+        case .atlantisAttack:
+            favorAtlantisLookout = true
+            caption = "ATTACK RUN"; detail = "ATLANTIS / ANCIENT DRONE DEFENSE"
+        case .atlantisDefense:
+            favorAtlantisLookout = false
+            caption = "ATLANTIS DEFENSE"; detail = "TRACKING INCOMING FIGHTERS"
+        case .atlantisBreach:
+            caption = "SHIELD COLLAPSE"; detail = "ATLANTIS HULL EXPOSED"
+        case .atlantisDestruction:
+            caption = "ATLANTIS DESTROYED"; detail = "SURVIVORS RETURNING TO THE BELT"
         case .none:
             caption = nil; detail = nil; featuredCarrier = nil
+            atlantisLookout = nil
             handoffIncoming.removeAll(); handoffExisting.removeAll(); handoffAnchor = nil
         }
         b.cameraChanged?()
@@ -116,7 +147,87 @@ final class CinematicDirector {
         begin(.explosion,in:b)
         if alreadyFollowing { b.cut = pendingCut }
     }
+    func requestAtlantisAttack(_ index: Int, in b: Dogfight) {
+        guard b.automatic, event == .none, b.cameraIndex == 2, let city = b.atlantis,
+              b.time>=nextHighlightTime, b.cameraAge>=2.4 else { return }
+        if favorAtlantisLookout {
+            startAtlantisLookout(index,city:city,in:b,fromPier:nextAtlantisPier)
+        } else {
+            b.followedIndex = index
+            heading = b.fighters[index].forward
+            begin(.atlantisAttack,in:b)
+        }
+    }
+
+    func requestAtlantisVolley(_ index: Int, in b: Dogfight) {
+        guard b.automatic, let city = b.atlantis,
+              (event == .none && b.cameraAge>=1.8) || (event == .atlantisDefense && eventAge>=2.4) else { return }
+        startAtlantisLookout(index,city:city,in:b,fromPier:false,volley:true)
+    }
+
+    private func startAtlantisLookout(_ index: Int, city: Atlantis, in b: Dogfight, fromPier: Bool, volley: Bool = false) {
+        let fighter = b.fighters[index]
+        let offset = fighter.position-city.position
+        let outward = unit(V3(offset.x,0,offset.z))
+        let right = unit(simd_cross(outward,V3(0,1,0)))
+        var position: V3
+        let launchFocus: V3?
+        if volley, let path = city.droneVolley?.path {
+            position = city.dronePort-outward*128+right*88+V3(0,30,0)
+            launchFocus = mix(path.origin,path.exit,0.46)+V3(0,35,0)
+        } else if fromPier {
+            let step = tau/6
+            let angle = (atan2(-outward.x,-outward.z)/step).rounded()*step
+            let pier = V3(-sin(angle),0,-cos(angle))
+            position = city.position+pier*380+V3(0,63,0)+right*86
+            launchFocus = nil
+        } else {
+            position = city.dronePort-outward*31+right*64+V3(0,21,0)
+            launchFocus = nil
+        }
+        if launchFocus == nil, city.hullImpact(from:position,to:fighter.position,padding:5) != nil {
+            position.y += 64
+        }
+        atlantisLookout = AtlantisLookout(index:index,generation:fighter.generation,position:position,
+                                         slide:right*(fromPier ? 17 : 25)+outward*12,
+                                         launchFocus:launchFocus)
+        nextAtlantisPier = !fromPier
+        begin(.atlantisDefense,in:b)
+        caption = volley ? "ANCIENT DRONES LAUNCH" : (fromPier ? "OUTER PIER" : "CENTRAL TOWER")
+        b.cameraChanged?()
+    }
+
+    private func considerAtlantisCoverage(in b: Dogfight) {
+        guard b.automatic, event == .none, b.cameraIndex == 2,
+              b.cameraAge>=Self.atlantisWideDuration, let city = b.atlantis, city.intact else { return }
+        let live = b.fighters.indices.filter { b.fighters[$0].active && b.fighters[$0].spin == nil }
+        let inbound = live.filter { b.fighters[$0].atlantisEgress == nil }
+        let candidates = inbound.isEmpty ? live : inbound
+        guard let index = candidates.min(by: {
+            simd_distance_squared(b.fighters[$0].position,city.position)<simd_distance_squared(b.fighters[$1].position,city.position)
+        }) else { return }
+        let fighter = b.fighters[index]
+        if city.distanceToSurface(from:fighter.position)<430 {
+            startAtlantisLookout(index,city:city,in:b,fromPier:nextAtlantisPier)
+        } else {
+            // Follow the flight in while the attackers are still too distant
+            // to read from the city itself.
+            b.followedIndex = index
+            heading = fighter.forward
+            begin(.atlantisAttack,in:b)
+        }
+    }
+
+    func atlantisFrame(_ city: Atlantis, in b: Dogfight, progress: Float = 0) -> (position: V3, look: V3, fov: Float) {
+        let outward = unit(V3(-city.position.x,0,-city.position.z))
+        let right = unit(simd_cross(outward,V3(0,1,0)))
+        let direction = unit(outward+right*(0.55+progress*0.38)+V3(0,0.68,0))
+        let distance = (1680+progress*130)/max(0.72,min(1,b.viewportAspect))
+        return (city.position+direction*distance,city.position+V3(0,30,0),52)
+    }
+
     func considerCriticalMoment(in b: Dogfight) {
+        guard !b.fleetTruce else { return }
         guard b.automatic, event == .none, b.cameraIndex == 2, b.cameraAge>8, b.time>=nextHighlightTime, b.time>=nextCriticalCheck else { return }
         nextCriticalCheck = b.time+0.2
         for i in b.fighters.indices where b.fighters[i].active && b.fighters[i].spin == nil {
@@ -143,7 +254,7 @@ final class CinematicDirector {
     func endEvent(in b: Dogfight, follow index: Int? = nil) {
         begin(.none,in:b)
         b.cameraIndex = 2; b.cameraAge = 0
-        nextHighlightTime = b.time+10
+        nextHighlightTime = b.time+(b.atlantisSiegeActive ? 2.4 : 10)
         if let index, b.fighters[index].active { b.followedIndex = index } else { b.selectCameraSubject() }
         prepareShot(in:b); b.cameraChanged?()
     }
@@ -291,6 +402,7 @@ final class CinematicDirector {
             coveredFlight = flight.start; begin(.formation,in:b)
         }
         if event == .none && b.automatic && b.cameraIndex != 2 && b.cameraAge>shotLength { endEvent(in:b) }
+        considerAtlantisCoverage(in:b)
         considerCriticalMoment(in:b)
         let up = V3(0,1,0)
         var desired = b.cameraPosition, look = b.cameraLook
@@ -352,6 +464,34 @@ final class CinematicDirector {
                 endEvent(in:b); update(0,in:b); return
             }
             desired = frame.position; look = frame.look; fov = frame.fov
+        } else if event == .atlantisArrival || event == .atlantisBreach || event == .atlantisDestruction {
+            guard let city = b.atlantis, eventAge<4.8 else {
+                endEvent(in:b); update(0,in:b); return
+            }
+            let frame = atlantisFrame(city,in:b,progress:eventAge/4.8)
+            desired = frame.position; look = frame.look; fov = frame.fov
+        } else if event == .atlantisDefense {
+            guard b.atlantisSiegeActive, eventAge<4.2, let shot = atlantisLookout else {
+                endEvent(in:b); update(0,in:b); return
+            }
+            let fighter = b.fighters[shot.index]
+            guard fighter.active, fighter.generation==shot.generation else {
+                endEvent(in:b); update(0,in:b); return
+            }
+            desired = shot.position+shot.slide*(eventAge/4.2)
+            look = shot.launchFocus ?? (fighter.position+fighter.velocity*0.16)
+            let range = simd_distance(desired,fighter.position)
+            fov = shot.launchFocus != nil ? 50 : max(21,min(38,38-range*0.018))
+        } else if event == .atlantisAttack {
+            let f = b.fighters[b.followedIndex]
+            guard b.atlantisSiegeActive, f.active, f.spin == nil, eventAge<3.1 else {
+                endEvent(in:b); update(0,in:b); return
+            }
+            heading = unit(mix(heading,f.forward,1-exp(-dt*5)))
+            let right = unit(simd_cross(heading,up))
+            desired = f.position-heading*48+right*17+up*12
+            look = f.position+heading*26
+            fov = 51
         } else if event == .attack {
             let f = b.fighters[b.followedIndex]
             guard let index = engagementTarget, f.active, b.fighters[index].active, eventAge<2.6 else {
@@ -399,7 +539,8 @@ final class CinematicDirector {
                 look = f.spin == nil ? mix(f.position+f.velocity*0.5,action,0.25) : f.position
                 fov = 56
             case 2:
-                let overview = battlefieldFrame(in:b)
+                let drift = min(1,b.cameraAge/Self.atlantisWideDuration)*0.55
+                let overview = b.atlantis.flatMap { $0.intact ? atlantisFrame($0,in:b,progress:drift) : nil } ?? battlefieldFrame(in:b)
                 desired = overview.position; look = overview.look; fov = overview.fov
             case 3:
                 let sweep = sin(min(1,b.cameraAge/shotLength) * Float.pi)*8
@@ -417,7 +558,8 @@ final class CinematicDirector {
                 fov = max(46,min(65,40+spacing*0.13))
             }
         }
-        desired = b.clearCamera(desired)
+        let fromAtlantis = event == .atlantisDefense
+        desired = b.clearCamera(desired,insideAtlantisShield:fromAtlantis)
         if b.cut {
             hardCuts += 1
             b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
@@ -432,7 +574,7 @@ final class CinematicDirector {
                 b.cameraLook = look; lookVelocity = .zero
             } else { damp(&b.cameraLook,velocity:&lookVelocity,target:look,frequency:9,dt:dt) }
         }
-        b.cameraPosition = b.clearCamera(b.cameraPosition)
+        b.cameraPosition = b.clearCamera(b.cameraPosition,insideAtlantisShield:fromAtlantis)
         let jitter = V3(sin(b.time*71),cos(b.time*59),sin(b.time*53))*shake*0.14
         b.camera.simdPosition = b.cameraPosition+jitter
         b.camera.look(at:SCNVector3(b.cameraLook),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))

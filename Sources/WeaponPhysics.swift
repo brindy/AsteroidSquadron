@@ -28,7 +28,7 @@ func interceptPoint(from origin: V3, velocity: V3, target: V3, targetVelocity: V
 
 extension Faction {
     var collisionRadius: Float {
-        switch self { case .rebel: return 6.7; case .empire: return 5.5; case .colonial: return 7; case .cylon: return 8.7; case .earth: return 7.3; case .shadow: return 8 }
+        switch self { case .rebel: return 6.7; case .empire: return 5.5; case .colonial: return 7; case .cylon: return 8.7; case .earth: return 7.3; case .shadow: return 8; case .tauri: return 7; case .goauld: return 8; case .wraith: return 8.1 }
     }
     var hitVolumes: [(V3,Float)] {
         switch self {
@@ -37,6 +37,9 @@ extension Faction {
         case .colonial: return [(V3(0,0,-1),1.25),(V3(0,0,-4.5),0.6),(V3(-2.6,-0.3,1.5),1),(V3(2.6,-0.3,1.5),1)]
         case .cylon: return [(V3(0,0,-0.7),1.3),(V3(-3,0,-1),1.2),(V3(3,0,-1),1.2),(V3(-5,0,-3.4),0.8),(V3(5,0,-3.4),0.8)]
         case .earth: return [(.zero,1.4),(V3(-4.5,-3.2,0.9),1.2),(V3(-4.5,3.2,0.9),1.2),(V3(4.5,-3.2,0.9),1.2),(V3(4.5,3.2,0.9),1.2)]
+        case .tauri: return [(V3(0,0,-2),1.15),(V3(0,0,-4.7),0.6),(V3(0,0,2),1.6),(V3(-3.4,0,2),1.0),(V3(3.4,0,2),1.0)]
+        case .goauld: return [(V3(0,0,-1.8),1.22),(V3(0,0,1.5),1.3),(V3(-3.1,0,1),1.15),(V3(3.1,0,1),1.15),(V3(-5.5,-0.35,-0.6),0.85),(V3(5.5,-0.35,-0.6),0.85)]
+        case .wraith: return [(V3(0,0,0.3),1.5),(V3(0,0,-2.75),0.8),(V3(0,0,-5.2),0.44),(V3(-2.7,-0.2,2.7),0.85),(V3(2.7,-0.2,2.7),0.85)]
         case .shadow: return [(V3(0,0,0.4),1.7),(V3(-4,0,0),1.2),(V3(4,0,0),1.2),(V3(-3,0,-3),0.7),(V3(3,0,-3),0.7)]
         }
     }
@@ -45,7 +48,7 @@ extension Faction {
 extension Dogfight {
     @discardableResult func fire(from index: Int, to targetIndex: Int) -> Bool {
         let f = fighters[index], target = fighters[targetIndex]
-        guard f.active, f.spin == nil, time>=f.breakUntil, target.active, f.side != target.side else { return false }
+        guard !fleetTruce, f.active, f.spin == nil, time>=f.breakUntil, target.active, f.side != target.side else { return false }
         let barrels = f.firingMuzzles
         let aligned = barrels.contains { muzzle in
             let matrix = muzzle.simdWorldTransform, origin = matrix.columns.3.xyz, forward = unit(-matrix.columns.2.xyz)
@@ -54,6 +57,29 @@ extension Dogfight {
             return simd_dot(unit(lead-origin),forward)>cone && simd_distance(origin,lead)<700
         }
         guard aligned else { return false }
+        launchVolley(from:index,targetsAtlantis:false)
+        return true
+    }
+
+    func fireAtAtlantis(from index: Int, city: Atlantis) -> Bool {
+        let fighter = fighters[index]
+        guard city.intact, fighter.active, fighter.spin == nil, fighter.atlantisEgress == nil,
+              city.distanceToSurface(from:fighter.position)<=Atlantis.attackRange else { return false }
+        let aligned = fighter.firingMuzzles.contains { muzzle in
+            let transform = muzzle.simdWorldTransform
+            let origin = transform.columns.3.xyz
+            let aim = unit(-transform.columns.2.xyz)
+            return city.impact(from:origin,to:origin+aim*(Atlantis.attackRange+25)) != nil
+        }
+        guard aligned else { return false }
+        launchVolley(from:index,targetsAtlantis:true)
+        director.requestAtlantisAttack(index,in:self)
+        return true
+    }
+
+    private func launchVolley(from index: Int, targetsAtlantis: Bool) {
+        let f = fighters[index]
+        let barrels = f.firingMuzzles
         let generations = fighters.map(\.generation)
         for muzzle in barrels {
             let transform = muzzle.simdWorldTransform
@@ -63,10 +89,9 @@ extension Dogfight {
             bolt.addChildNode(box(V3(0.1,0.1,length),projectileMaterials[f.faction]!,V3(0,0,-length/2)))
             bolt.simdOrientation = simd_quatf(from:V3(0,0,-1),to:forward)
             scene.rootNode.addChildNode(bolt)
-            lasers.append(Laser(node:bolt,position:origin,velocity:forward*f.faction.projectileSpeed+f.velocity,life:1.8,sourceSide:f.side,generations:generations,launchOrigin:origin,launchForward:forward,inheritedVelocity:f.velocity,length:length,sourceIndex:index))
+            lasers.append(Laser(node:bolt,position:origin,velocity:forward*f.faction.projectileSpeed+f.velocity,life:1.8,sourceSide:f.side,generations:generations,launchOrigin:origin,launchForward:forward,inheritedVelocity:f.velocity,length:length,sourceIndex:index,targetsAtlantis:targetsAtlantis))
         }
         shots += barrels.count; f.gunCycle += 1
-        return true
     }
     func updateLasers(_ dt: Float) {
         for i in lasers.indices.reversed() {
@@ -78,7 +103,7 @@ extension Dogfight {
             lasers[i].node.simdPosition = lasers[i].position
             var fraction: Float = 2
             var victim: Fighter?
-            for (j,f) in fighters.enumerated() where f.active && f.side != lasers[i].sourceSide && f.generation == lasers[i].generations[j] {
+            for (j,f) in fighters.enumerated() where !lasers[i].targetsAtlantis && f.active && f.side != lasers[i].sourceSide && f.generation == lasers[i].generations[j] {
                 for (center,radius) in f.faction.hitVolumes {
                     let world = f.node.simdConvertPosition(center,to:nil)
                     if let hit = sphereImpact(from:from,to:to,center:world,radius:radius), hit<fraction { fraction = hit; victim = f }
@@ -87,9 +112,20 @@ extension Dogfight {
             for rock in rocks {
                 if let hit = sphereImpact(from:from,to:to,center:rock.position,radius:rock.radius), hit<fraction { fraction = hit; victim = nil }
             }
+            var cityHit: Atlantis?
+            if lasers[i].targetsAtlantis, let city = atlantis, city.intact,
+               let hit = city.impact(from:from,to:to), hit<fraction {
+                fraction = hit
+                cityHit = city
+            }
             if fraction<=1 {
                 let impact = mix(from,to,fraction)
-                burst(at:impact,count:4,big:false)
+                if let city = cityHit {
+                    if city.shieldPoints==0 { burst(at:impact,count:6,big:false,scale:3) }
+                    hitAtlantis(city,at:impact)
+                } else {
+                    burst(at:impact,count:4,big:false)
+                }
                 if let victim {
                     weaponHits += 1
                     victim.hitPoints -= 1

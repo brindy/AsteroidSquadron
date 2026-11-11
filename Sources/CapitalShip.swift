@@ -66,11 +66,29 @@ final class Carrier {
     var blinkExited = false
     var arrivalDuration: Float { faction.usesJumpWindow ? 2.1 : (faction.usesBlinkFTL ? 0.85 : 1.4) }
     var cameraBounds: V3 {
-        switch faction { case .colonial: return V3(84,30,130); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return V3(37,37,1); default: return V3(77,44,130) }
+        switch faction { case .colonial: return V3(84,30,130); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return V3(37,37,1); case .tauri: return V3(73,36,145); case .goauld: return V3(106,74,106); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
     }
     // The Imperial bridge is above the hull. Centering its exclusion volume at
     // the origin incorrectly blocked empty space beneath the launch bay.
-    var cameraCenter: V3 { faction == .empire ? V3(0,26,0) : .zero }
+    var cameraCenter: V3 {
+        if faction == .empire { return V3(0,26,0) }
+        if faction == .goauld { return V3(0,39,0) }
+        return .zero
+    }
+    var cameraVolumes: [(V3,V3)] {
+        switch faction {
+        case .tauri:
+            return [(V3(0,2,-4),V3(34,32,140)),
+                    (V3(-51,-5,-7),V3(18,12,80)),
+                    (V3(51,-5,-7),V3(18,12,80))]
+        case .wraith:
+            return [(V3(0,3,0),V3(62,39,154)),
+                    (V3(-51,0,6),V3(33,22,130)),
+                    (V3(51,0,6),V3(33,22,130))]
+        default:
+            return [(cameraCenter,cameraBounds)]
+        }
+    }
     var framingScale: Float { (faction == .cylon ? 1.4 : (faction == .colonial ? 1.12 : 1))*scale }
     var worldRadius: Float { max(cameraBounds.x,max(cameraBounds.y,cameraBounds.z))*scale }
     init(faction: Faction = .empire, side: Int = 1, origin: V3, forward: V3, start: Float, squadron: [Int]) {
@@ -117,6 +135,9 @@ final class Carrier {
         case .cylon: port = V3(sign*20,-34,-30)
         case .shadow: port = V3(sign*22,-32,-56)
         case .earth: port = V3(sign*(4+Float(slot/2)*3),Float(slot%3-1)*3,0)
+        case .tauri: port = V3(sign*51,-6,-87)
+        case .goauld: port = V3(sign*29,-18,-74)
+        case .wraith: port = V3(sign*32,-22,-93)
         default: port = V3(sign*11,-16,15)
         }
         return station(age)+node.simdOrientation.act(port*scale)

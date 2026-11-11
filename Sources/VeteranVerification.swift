@@ -45,14 +45,14 @@ func verifyVeteransAndSkybox() {
     veteran.enemyKills = 6; b.updateAce()
     veteranCheck(veteran.isAce && b.fighters.filter(\.isAce).count == 1,"Qualified veteran did not receive the sole Ace title")
     veteranCheck(friends[4].encountersSurvived == 1 && !friends[4].isAce,"A newcomer received encounters it did not survive")
-    veteranCheck(veteran.tally.count == 5 && veteran.node.childNodes.count == 1,"Scratch badge did not preserve the model hierarchy")
+    veteranCheck(veteran.aceBadge.visible && veteran.node.childNodes.count == 1,"Ace badge did not preserve the model hierarchy")
     for i in 5...45 { veteran.encountersSurvived = i; b.updateAce() }
-    veteranCheck(veteran.tally.node.childNodes.count<=26,"Scratch tally nodes grew without bound")
-    veteran.node.simdOrientation = simd_quatf(angle:1.2,axis:V3(0,0,1)); veteran.tally.updatePose(veteran)
-    let world = veteran.tally.node.simdWorldPosition-veteran.node.simdWorldPosition
-    veteranCheck(abs(world.x)<0.001 && world.y>=2.5,"Tally rolled around the fighter instead of hovering above it")
+    veteranCheck(veteran.aceBadge.node.childNodes.isEmpty,"Ace badge accumulated extra geometry")
+    veteran.node.simdOrientation = simd_quatf(angle:1.2,axis:V3(0,0,1)); veteran.aceBadge.updatePose(veteran)
+    let world = veteran.aceBadge.node.simdWorldPosition-veteran.node.simdWorldPosition
+    veteranCheck(abs(world.x)<0.001 && world.y>=2.5,"Ace badge rolled around the fighter instead of hovering above it")
     veteran.replaceFaction(.colonial); b.updateAce()
-    veteranCheck(veteran.encountersSurvived == 0 && !veteran.isAce && veteran.tally.node.parent == nil,"A new pilot inherited an ace badge")
+    veteranCheck(veteran.encountersSurvived == 0 && !veteran.isAce && veteran.aceBadge.node.parent == nil,"A new pilot inherited an ace badge")
     let empty = Dogfight(seed:1415,initialFactions:[.rebel,.empire],initialArrivals:false)
     for f in empty.fighters { empty.destroy(f) }
     empty.requestReplacement(for:0); empty.requestReplacement(for:1)
@@ -91,7 +91,7 @@ func verifyVeteransAndSkybox() {
         return NSBitmapImageRep(data:snapshot.tiffRepresentation!)!.representation(using:.png,properties:[:])!
     }
     veteranCheck(pixels(.zero) == pixels(V3(12000,4000,-10000)),"Starfield has translation parallax instead of being an infinite skybox")
-    print("PASS: two-win top-ups preserve survivors, arrive before the enemy, protect generations, and preserve the exclusive qualified Ace; bounded world-up scratch tallies; steady micro-steering; seeded infinite galaxy skybox with no translation parallax.")
+    print("PASS: two-win top-ups preserve survivors, arrive before the enemy, protect generations, and preserve the exclusive qualified Ace; world-up Ace stars; steady micro-steering; seeded infinite galaxy skybox with no translation parallax.")
     fflush(stdout)
 }
 
@@ -116,11 +116,9 @@ func renderVeteranReview(directory: URL) {
     b.camera.camera!.fieldOfView = 49
     b.camera.simdPosition = V3(13,12,-32); b.camera.look(at:SCNVector3(0,4,0),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
     hero.enemyKills = 6
-    for count in [3,4,5,12] {
-        hero.encountersSurvived = count; b.updateAce()
-        save("pilot-\(count)-encounters")
-    }
-    hero.node.simdOrientation = simd_quatf(angle:0.9,axis:V3(0,0,1)); hero.tally.updatePose(hero)
+    hero.encountersSurvived = 3; b.updateAce()
+    save("ace-star")
+    hero.node.simdOrientation = simd_quatf(angle:0.9,axis:V3(0,0,1)); hero.aceBadge.updatePose(hero)
     save("ace-banking")
     hero.node.isHidden = true
     let sky = ProceduralStarfield(seed:1414)

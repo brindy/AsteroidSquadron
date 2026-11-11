@@ -110,7 +110,7 @@ extension Dogfight {
         scene.rootNode.addChildNode(flash)
         effects.append(Transient(node:flash,kind:.jump,life:0.38,duration:0.38))
     }
-    func burst(at p: V3, count: Int, big: Bool, velocity: V3 = .zero) {
+    func burst(at p: V3, count: Int, big: Bool, velocity: V3 = .zero, scale: Float = 1) {
         let debris = material(color(0.25,0.29,0.3),metal:0.8)
         let hotEdge = material(color(0.16,0.13,0.1),emission:color(0.7,0.12,0.01),metal:0.6)
         let ember = material(color(1,0.5,0.12),emission:color(3,0.8,0.09))
@@ -118,7 +118,7 @@ extension Dogfight {
         for i in 0..<count {
             let isDebris = big && i<14
             let duration = rng.range(isDebris ? 2.4 : 0.15,isDebris ? 5 : (big ? 1.4 : 0.5))
-            let size = isDebris ? rng.range(0.35,1.0) : rng.range(0.045,0.13)
+            let size = scale*(isDebris ? rng.range(0.35,1.0) : rng.range(0.045,0.13))
             let g: SCNGeometry
             if isDebris {
                 g = SCNBox(width:CGFloat(rng.range(0.2,0.7)),height:0.07,length:CGFloat(rng.range(0.8,2.1)),chamferRadius:0.015)
@@ -135,15 +135,15 @@ extension Dogfight {
             sparks.append(Spark(node:n,position:p,velocity:v,life:duration,duration:duration,scale:size,spin:rng.vector(3),kind:isDebris ? .debris : (big ? .ember : .impact)))
         }
         if big {
-            let blast = ExplosionVolume(at:p,velocity:velocity,shape:V3(rng.range(0.9,1.2),rng.range(0.8,1.1),rng.range(0.9,1.2)),seed:rng.range(0,100))
+            let blast = ExplosionVolume(at:p,velocity:velocity,shape:V3(rng.range(0.9,1.2),rng.range(0.8,1.1),rng.range(0.9,1.2))*scale,seed:rng.range(0,100))
             blasts.append(blast); scene.rootNode.addChildNode(blast.node)
-            let flash = node(SCNPlane(width:20,height:20),flashMaterial(),p)
+            let flash = node(SCNPlane(width:CGFloat(20*scale),height:CGFloat(20*scale)),flashMaterial(),p)
             flash.constraints = [SCNBillboardConstraint()]
             scene.rootNode.addChildNode(flash)
             effects.append(Transient(node:flash,kind:.flash,life:0.18,duration:0.18))
             let light = SCNNode(); light.light = SCNLight(); light.light!.type = .omni
             light.light!.color = color(1,0.65,0.3); light.light!.intensity = 5000
-            light.light!.attenuationEndDistance = 120; light.simdPosition = p
+            light.light!.attenuationEndDistance = CGFloat(120*scale); light.simdPosition = p
             scene.rootNode.addChildNode(light)
             effects.append(Transient(node:light,kind:.light,life:0.6,duration:0.6))
             let distance = simd_distance(cameraPosition,p)

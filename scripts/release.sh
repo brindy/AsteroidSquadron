@@ -62,6 +62,7 @@ git archive "$source_commit" | tar -x -C "$release_source"
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-pursuit > "$release_dir/flight-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-babylon > "$release_dir/arrival-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-veterans > "$release_dir/veteran-checks.log" 2>&1
+"$release_app/Contents/MacOS/AsteroidSquadron" --verify-stargate > "$release_dir/stargate-checks.log" 2>&1
 signature_info="$(codesign --display --verbose=4 "$release_app" 2>&1)"
 print -r -- "$signature_info" | grep -q '^Authority=Developer ID Application:' || { print -u2 'App is not signed with Developer ID Application.'; exit 1; }
 print -r -- "$signature_info" | grep -q 'flags=.*runtime' || { print -u2 'Hardened runtime is missing.'; exit 1; }
@@ -142,7 +143,7 @@ report = {
     'architectures': subprocess.check_output(['xcrun','lipo',str(app / 'Contents/MacOS/AsteroidSquadron'),'-archs'],text=True).strip().split(),
     'appNotarization': {'id':app_receipt['id'],'status':app_receipt['status']},
     'dmgNotarization': {'id':dmg_receipt['id'],'status':dmg_receipt['status']},
-    'verified': ['bundled app icon and matching custom DMG volume icon','deep strict code signature','hardened runtime and secure timestamp','app and DMG stapling','Gatekeeper app and DMG assessments','ZIP extraction signature, stapling and Gatekeeper','native pursuit and rendered jump-arrival checks','veteran top-up, ace, smooth steering and skybox checks'],
+    'verified': ['bundled app icon and matching custom DMG volume icon','deep strict code signature','hardened runtime and secure timestamp','app and DMG stapling','Gatekeeper app and DMG assessments','ZIP extraction signature, stapling and Gatekeeper','native pursuit and rendered jump-arrival checks','veteran top-up, ace HUD, smooth steering and skybox checks','Stargate carriers, patrols, Atlantis siege, drone volleys and camera coverage'],
     'notPerformed': ['browser-download installation test on a clean Mac'],
     'sha256': {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.iterdir()) if p.name.startswith('Asteroid-Squadron-') and p.suffix in ['.zip','.dmg']}
 }

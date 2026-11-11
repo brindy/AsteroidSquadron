@@ -2,7 +2,7 @@ import AppKit
 import SceneKit
 import simd
 
-private func armoredLoft(_ sections: [(Float,Float,Float,Float)], mat: SCNMaterial) -> SCNNode {
+func armoredLoft(_ sections: [(Float,Float,Float,Float)], mat: SCNMaterial) -> SCNNode {
     var vertices: [V3] = [], flat: [SCNVector3] = [], normals: [SCNVector3] = [], topology: [Int] = []
     let profile: [(Float,Float)] = [(0.65,1),(1,0.5),(1,-0.5),(0.65,-1),(-0.65,-1),(-1,-0.5),(-1,0.5),(-0.65,1)]
     for (z,w,h,y) in sections { vertices += profile.map { V3($0.0*w,y+$0.1*h,z) } }

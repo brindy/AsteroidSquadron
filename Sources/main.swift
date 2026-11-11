@@ -191,7 +191,9 @@ final class Fighter {
     var enemyKills = 0
     var isAce = false
     var aceEligible: Bool { active && encountersSurvived>=3 && enemyKills>=6 }
-    let tally = PilotTally()
+    let aceBadge = AceBadge()
+    var patrolRoute: [V3] = []
+    var atlantisEgress: V3?
     var steeringDirection = V3(0,0,-1)
     var aimDirection = V3(0,0,-1)
     var orbitRate: Float = 0.185
@@ -255,7 +257,7 @@ final class Fighter {
     func replaceFaction(_ replacement: Faction) {
         for child in node.childNodes { child.removeFromParentNode() }
         faction = replacement; generation += 1
-        encountersSurvived = 0; enemyKills = 0; isAce = false; tally.reset()
+        encountersSurvived = 0; enemyKills = 0; isAce = false; aceBadge.reset(); patrolRoute.removeAll(); atlantisEgress = nil
         node.addChildNode(replacement.fighterModel())
         scanner = node.childNode(withName:"scanner",recursively:true)
         cacheMuzzles()
@@ -294,6 +296,7 @@ struct Laser {
     let inheritedVelocity: V3
     let length: Float
     var sourceIndex: Int? = nil
+    var targetsAtlantis = false
 }
 struct Spark {
     enum Kind { case debris, ember, impact }
@@ -389,7 +392,12 @@ final class Dogfight {
     var starfuryPivots = 0
     var squadronEncounters = [0,0]
     var encountersCompleted = 0
+    var atlantis: Atlantis?
+    var nextAtlantisEncounter: Int?
+    var returningFromAtlantis = false
+    var atlantisRegroupUntil: Float?
     var acePromotions = 0
+    var aceKillRecord = 0
     var acesEmerged = 0
     var longestEncounterStreak = 0
     // Only the latest honoured generation per roster slot is needed: bounded
@@ -454,8 +462,9 @@ final class Dogfight {
     var arrivingCount: Int { fighters.filter { $0.state == .arriving }.count }
     func sideCount(_ side: Int) -> Int { fighters.filter { $0.side == side && $0.active }.count }
 
-    init(seed: UInt64 = UInt64.random(in:1...UInt64.max), initialFactions: [Faction]? = nil, initialArrivals: Bool = true) {
+    init(seed: UInt64 = UInt64.random(in:1...UInt64.max), initialFactions: [Faction]? = nil, initialArrivals: Bool = true, firstAtlantisEncounter: Int? = 3) {
         self.seed = seed
+        nextAtlantisEncounter = firstAtlantisEncounter
         rng = Random(state:seed)
         director = CinematicDirector(seed:seed)
         arenaRotation = simd_quatf(angle:rng.range(0,tau),axis:V3(0,1,0)) * simd_quatf(angle:rng.range(-0.35,0.35),axis:V3(0,0,1))
@@ -650,9 +659,15 @@ final class Dogfight {
                 }
             } else { updateFlight(f,dt:dt,positions:positions,velocities:velocities,active:active) }
             f.scanner?.simdPosition.x = sin(time*3+Float(f.pair))*0.49
-            f.tally.updatePose(f)
+            f.aceBadge.updatePose(f)
         }
         resolveShipCollisions(from:positions,wasActive:active,dt:dt)
+        if dt>0 && atlantisSiegeActive {
+            for i in fighters.indices where fighters[i].active {
+                let f = fighters[i]
+                resolveAtlantisCollision(f,from:active[i] ? positions[i] : f.position)
+            }
+        }
         for f in fighters {
             if f.active && dt>0 {
                 f.history.append((time,f.position))
@@ -662,6 +677,10 @@ final class Dogfight {
         for i in fighters.indices {
             let f = fighters[i]
             guard dt>0, f.cooldown<=0, f.active, f.spin == nil, time>=f.entryTime+f.formationHold, time>=f.breakUntil else { continue }
+            if let city = atlantis, city.intact {
+                f.cooldown = fireAtAtlantis(from:i,city:city) ? rng.range(0.23,0.32) : 0.07
+                continue
+            }
             if let target = chooseTarget(for:f), fire(from:i,to:target) {
                 if f.burstShotsLeft == 0 { f.burstShotsLeft = 4 }
                 else { f.burstShotsLeft -= 1 }
@@ -669,6 +688,7 @@ final class Dogfight {
             } else { f.burstShotsLeft = 0; f.cooldown = 0.04 }
         }
         updateLasers(dt); updateSparks(dt); updateEffects(dt)
+        updateAtlantis(dt,starts:positions,wasActive:active)
         updateReinforcements(dt); updateCarrier(); updateFighterJumpClipping(); updateAce(); updateCamera(dt); updateBlasts(dt)
         for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
         planet?.update(time:time)
@@ -695,7 +715,7 @@ final class Dogfight {
         scene.rootNode.addChildNode(n)
         effects.append(Transient(node:n,kind:.arrival,life:0.45,duration:0.45))
     }
-    func clearCamera(_ point: V3) -> V3 {
+    func clearCamera(_ point: V3, insideAtlantisShield: Bool = false) -> V3 {
         var p = point
         for _ in 0..<3 {
             for rock in rocks {
@@ -708,15 +728,22 @@ final class Dogfight {
                 if simd_length_squared(delta)<clearance*clearance { p = f.position+unit(delta)*clearance }
             }
             for ship in carriers where !ship.node.isHidden {
-                let inverse = ship.node.simdWorldTransform.inverse
-                let local = (inverse*SIMD4<Float>(p.x,p.y,p.z,1)).xyz
-                let bounds = ship.cameraBounds
-                let normalized = (local-ship.cameraCenter)/bounds
-                if simd_length_squared(normalized)<1 {
-                    let safe = unit(normalized)*bounds+ship.cameraCenter
-                    p = (ship.node.simdWorldTransform*SIMD4<Float>(safe.x,safe.y,safe.z,1)).xyz
+                let transform = ship.node.simdWorldTransform
+                let inverse = transform.inverse
+                for (center,bounds) in ship.cameraVolumes {
+                    let local = (inverse*SIMD4<Float>(p.x,p.y,p.z,1)).xyz
+                    let normalized = (local-center)/bounds
+                    if simd_length_squared(normalized)<1 {
+                        let safe = unit(normalized)*bounds+center
+                        p = (transform*SIMD4<Float>(safe.x,safe.y,safe.z,1)).xyz
+                    }
                 }
             }
+        }
+        if let city = atlantis, city.intact {
+            let hit = insideAtlantisShield ? city.hullImpact(from:p,to:p,padding:10)
+                                           : city.impact(from:p,to:p,padding:10)
+            if hit != nil { p = city.position+unit(p-city.position)*(Atlantis.shieldRadius+12) }
         }
         return p
     }
@@ -829,6 +856,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var status: NSTextField!
     var telemetry: NSTextField!
     var aceHistory: NSTextField!
+    var aceStatus: NSTextField!
     var sector: NSTextField!
     var eventStatus: NSTextField!
     var hint: NSTextField!
@@ -847,7 +875,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Use the compiled bundle icon everywhere, including the Dock. A raw
         // NSImage override bypasses native icon rendering and hides bundle bugs.
         buildMenu()
-        battle = Dogfight(seed:requestedSeed(),initialFactions:requestedFactions())
+        battle = Dogfight(seed:requestedSeed(),initialFactions:requestedFactions(),
+                          firstAtlantisEncounter:CommandLine.arguments.contains("--atlantis") ? 0 : 3)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1440,height:900)
         let width = min(1440,screen.width-80), height = min(900,screen.height-80)
         window = NSWindow(contentRect:NSRect(x:0,y:0,width:width,height:height),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
@@ -969,6 +998,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         aceHistory = label("",size:10,color:color(0.8,0.66,0.4),mono:true)
         aceHistory.toolTip = "Distinct pilots who have held the sole Ace title, and the most completed enemy encounters survived by any one pilot in this arena. Records remain after a pilot is lost; a new arena resets them."
         place(aceHistory,x:38,y:130,width:w-76,height:17,mask:[.width])
+        aceStatus = label(battle.aceHUDStatus,size:11,weight:.medium,color:color(1,0.78,0.37),mono:true)
+        place(aceStatus,x:38,y:150,width:w-76,height:17,mask:[.width])
         telemetry = label("",size:10,color:color(0.45,0.62,0.66),mono:true)
         place(telemetry,x:38,y:107,width:680,height:17)
         autoButton = button("AUTO  ON",action:#selector(toggleAutomatic),tooltip:"Action-directed cinematic camera cuts (A)")
@@ -1001,12 +1032,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             lastHUD = now
             let duration = Int(now-startTime)
             telemetry.stringValue = String(format:"%02d %@ / %02d %@   ·   WAVE %02d   ·   %02d:%02d:%02d",battle.sideCount(0),battle.sideFactions[0].fighterName,battle.sideCount(1),battle.sideFactions[1].fighterName,battle.waveNumber,duration/3600,(duration/60)%60,duration%60)
-            if let ace = battle.fighters.first(where:{$0.active && $0.isAce}) {
-                telemetry.stringValue += "   ·   ACE \(ace.enemyKills) KILLS"
-            }
+            aceStatus.stringValue = battle.aceHUDStatus
             aceHistory.stringValue = String(format:"ACES EMERGED  %02d   ·   LONGEST SURVIVAL  %d %@",battle.acesEmerged,battle.longestEncounterStreak,battle.longestEncounterStreak == 1 ? "ENCOUNTER" : "ENCOUNTERS")
             sector.stringValue = String(format:"PROCEDURAL ARENA  /  SECTOR %08llX",battle.seed & 0xFFFFFFFF)+"  /  "+(battle.planet?.biome.title ?? "")
-            if let request = battle.fleetRequests.min(by:{$0.countdown<$1.countdown}) {
+            if let city = battle.atlantis, city.intact {
+                let shield = Int(ceil(100*Double(city.shieldPoints)/Double(Atlantis.shieldCapacity)))
+                let hull = Int(ceil(100*Double(city.hullPoints)/Double(Atlantis.hullCapacity)))
+                eventStatus.stringValue = "ATLANTIS   /   SHIELD \(shield)%   /   HULL \(hull)%"
+                eventStatus.textColor = shield>0 ? cyan : orange
+            } else if battle.returningFromAtlantis {
+                eventStatus.stringValue = battle.atlantisRegroupUntil == nil ? "ATLANTIS LOST   /   RETURN TO ASTEROID FIELD" : "ATLANTIS LOST   /   BELT PATROL"
+                eventStatus.textColor = orange
+            } else if let request = battle.fleetRequests.min(by:{$0.countdown<$1.countdown}) {
                 eventStatus.stringValue = String(format:"%@ INBOUND / ETA %02d SEC",battle.sideFactions[request.side].title,max(0,Int(ceil(request.countdown))))
                 eventStatus.textColor = cyan
             } else if battle.fighters.contains(where:{$0.state == .arriving && $0.entry == .hyperspace && battle.time>=$0.entryTime-1.25}) {
@@ -1094,15 +1131,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         battle.paused = wasPaused; battle.automatic = wasAutomatic
         battle.cameraChanged = { [weak self] in self?.updateCameraHUD() }
         view.scene = battle.scene; view.pointOfView = battle.camera
+        aceStatus.stringValue = battle.aceHUDStatus
         updateCameraHUD(); showControls()
     }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "",.credits:NSAttributedString(string:"An endless, procedural crossover starfighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners.")])
+        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "",.credits:NSAttributedString(string:"An endless, procedural crossover starfighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners.")])
     }
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. Only the highest-kill eligible living pilot becomes Ace: at least three survived encounters and six enemy kills. The gold scratch tally starts at four. The HUD records distinct Ace pilots and the longest completed-encounter survival streak in this arena, even after pilots are lost. R resets these arena records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners."
+        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. A pilot needs three survived encounters, six enemy kills, and a kill count above the previous Ace record. The current Ace carries a gold star. The title can stay vacant until the record is beaten. Without opponents, pilots patrol through and around the belt. Both squadrons attack Atlantis when it appears beyond the field. After its destruction, surviving fighters return to the belt. The HUD records distinct Ace pilots and the longest completed-encounter survival streak in this arena, even after pilots are lost. R resets these arena records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }
@@ -1145,7 +1183,13 @@ func requestedSeed() -> UInt64 {
     return UInt64.random(in:1...UInt64.max)
 }
 
-if CommandLine.arguments.contains("--verify-veterans") {
+if CommandLine.arguments.contains("--verify-stargate") {
+    let args = CommandLine.arguments
+    let output = args.firstIndex(of:"--render-stargate-review").flatMap { index in
+        index+1<args.count ? URL(fileURLWithPath:args[index+1]) : nil
+    }
+    verifyStargate(renderDirectory:output)
+} else if CommandLine.arguments.contains("--verify-veterans") {
     verifyVeteransAndSkybox()
 } else if let index = CommandLine.arguments.firstIndex(of:"--render-veteran-review"), index+1<CommandLine.arguments.count {
     renderVeteranReview(directory:URL(fileURLWithPath:CommandLine.arguments[index+1]))

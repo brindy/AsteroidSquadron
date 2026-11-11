@@ -39,7 +39,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
-<key>NSHumanReadableCopyright</key><string>Unofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 belong to their respective owners.</string>
+<key>NSHumanReadableCopyright</key><string>Unofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners.</string>
 </dict></plist>
 PLIST
 /usr/libexec/PlistBuddy -c "Merge '$build_temp/icon-info.plist'" "$APP/Contents/Info.plist"

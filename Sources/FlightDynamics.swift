@@ -43,6 +43,7 @@ extension Dogfight {
         f.applyFlightPose()
     }
     func chooseTarget(for f: Fighter) -> Int? {
+        if fleetTruce { f.attackTarget = nil; return nil }
         let current = f.attackTarget.flatMap { fighters[$0].active && fighters[$0].side != f.side ? $0 : nil }
         if let current { return current }
         let choices = fighters.indices.filter { fighters[$0].active && fighters[$0].side != f.side }
@@ -81,27 +82,43 @@ extension Dogfight {
         let radial = simd_length(f.position)
         let boost = max(0,min(1,(radial-650)/800))
         var speed = f.cruiseSpeed+(215-f.cruiseSpeed)*boost*boost*(3-2*boost)
-        var goal = orbitPath(f,time+2.5)
-        if var index = chooseTarget(for:f), simd_length(positions[index])<1100, radial<1300 {
-            if f.spin == nil {
-                if f.pursuitTarget != index || f.pursuitGeneration != fighters[index].generation || f.pursuitDeadline<=0 {
-                    f.pursuitTarget = index; f.pursuitGeneration = fighters[index].generation
-                    f.pursuitDeadline = max(time,f.breakUntil)+rng.range(5,10)
-                }
-                if time>=f.pursuitDeadline {
-                    breakPursuit(f,target:index,positions:positions)
-                    index = f.attackTarget!
-                }
-            } else { f.pursuitDeadline = 0 }
-            let p = positions[index], v = velocities[index]
-            let muzzle = f.firingMuzzles.first?.simdWorldTransform.columns.3.xyz ?? f.position
-            goal = interceptPoint(from:muzzle,velocity:f.velocity,target:p,targetVelocity:v,speed:f.faction.projectileSpeed)
-            if simd_distance(p,f.position)<24 && time>f.breakUntil+1 {
-                let right = unit(simd_cross(f.forward,f.navigationUp))
-                f.breakDirection = unit(f.forward*0.25+right*(f.pair%2 == 0 ? 0.9 : -0.9)+f.navigationUp*0.25)
-                f.breakUntil = time+1.8; f.breakSpeed = f.cruiseSpeed*1.1
+        var goal: V3
+        if let city = atlantis, city.intact {
+            goal = atlantisDestination(for:f,city:city,speed:&speed)
+            f.pursuitDeadline = 0
+            f.pivotUntil = -100
+        } else {
+            let target = chooseTarget(for:f)
+            if target == nil {
+                goal = patrolDestination(for:f)
+            } else {
+                f.patrolRoute.removeAll(keepingCapacity:true)
+                goal = orbitPath(f,time+2.5)
             }
-        } else { f.pursuitDeadline = 0 }
+            if var index = target, simd_length(positions[index])<1100, radial<1300 {
+                if f.spin == nil {
+                    if f.pursuitTarget != index || f.pursuitGeneration != fighters[index].generation || f.pursuitDeadline<=0 {
+                        f.pursuitTarget = index; f.pursuitGeneration = fighters[index].generation
+                        f.pursuitDeadline = max(time,f.breakUntil)+rng.range(5,10)
+                    }
+                    if time>=f.pursuitDeadline {
+                        breakPursuit(f,target:index,positions:positions)
+                        index = f.attackTarget!
+                    }
+                } else { f.pursuitDeadline = 0 }
+                let p = positions[index], v = velocities[index]
+                let muzzle = f.firingMuzzles.first?.simdWorldTransform.columns.3.xyz ?? f.position
+                goal = interceptPoint(from:muzzle,velocity:f.velocity,target:p,targetVelocity:v,speed:f.faction.projectileSpeed)
+                if simd_distance(p,f.position)<24 && time>f.breakUntil+1 {
+                    let right = unit(simd_cross(f.forward,f.navigationUp))
+                    f.breakDirection = unit(f.forward*0.25+right*(f.pair%2 == 0 ? 0.9 : -0.9)+f.navigationUp*0.25)
+                    f.breakUntil = time+1.8; f.breakSpeed = f.cruiseSpeed*1.1
+                }
+            } else {
+                f.pursuitDeadline = 0
+                if target == nil { f.breakUntil = -1; f.pivotUntil = -100 }
+            }
+        }
         var desired = time<f.breakUntil ? f.breakDirection : unit(goal-f.position)
         if time<f.breakUntil { speed = max(speed,f.breakSpeed) }
         // An inertially drifting Starfury must watch its flight path, not its nose.

@@ -2,92 +2,98 @@ import AppKit
 import SceneKit
 import simd
 
-// One camera-facing set of hand-scratched tally marks for the sole Ace.
-// It lives under the model so faction replacement still leaves one model root.
-final class PilotTally {
+// A single gold, camera-facing star. The world-up offset follows the hull
+// without spinning around it when the pilot banks or tumbles.
+final class AceBadge {
     let node = SCNNode()
-    private(set) var count = 0
     private var hoverHeight: Float = 5
+    var visible: Bool { node.parent != nil }
+
     init() {
-        node.name = "pilot.tally"
-        let billboard = SCNBillboardConstraint(); billboard.freeAxes = .all
-        node.constraints = [billboard]
+        node.name = "pilot.ace"
+        node.constraints = [SCNBillboardConstraint()]
     }
-    func setCount(_ value: Int, on fighter: Fighter) {
-        guard value != count else { return }
-        count = value
-        node.removeFromParentNode()
-        for child in node.childNodes { child.removeFromParentNode() }
-        guard value>0, let model = fighter.node.childNodes.first else { return }
-        hoverHeight = max(2.5,Float(model.boundingBox.max.y)+2)
-        model.addChildNode(node)
-        let ink = material(color(1,0.77,0.32),emission:color(0.7,0.35,0.05))
-        ink.lightingModel = .constant
-        let shown = min(25,value), groups = (shown+4)/5
-        for i in 0..<shown {
-            let group = i/5, stroke = i%5
-            let origin = Float(group)*2.45-Float(groups-1)*1.225-0.7
-            let a: V3, b: V3
-            if stroke == 4 { a = V3(origin-0.35,-0.1,0.02); b = V3(origin+1.75,1.9,0.02) }
-            else {
-                let x = origin+Float(stroke)*0.46
-                let tilt = Float((i*7)%5-2)*0.035
-                a = V3(x,-0.08,0); b = V3(x+tilt,1.85-Float(i%3)*0.06,0)
+
+    func attach(to fighter: Fighter) {
+        guard let model = fighter.node.childNodes.first else { return }
+        if node.geometry == nil {
+            let star = NSBezierPath()
+            for i in 0..<10 {
+                let angle = CGFloat(i)*CGFloat.pi/5+CGFloat.pi/2
+                let radius: CGFloat = i%2 == 0 ? 2.4 : 1.02
+                let point = NSPoint(x:cos(angle)*radius,y:sin(angle)*radius)
+                if i == 0 { star.move(to:point) } else { star.line(to:point) }
             }
-            node.addChildNode(segment(a,b,radius:0.045,mat:ink))
+            star.close()
+            let shape = SCNShape(path:star,extrusionDepth:0.08)
+            let gold = material(color(1,0.76,0.28))
+            gold.lightingModel = .constant
+            gold.isDoubleSided = true
+            shape.materials = [gold]
+            node.geometry = shape
         }
-        if value>=4 {
-            let label = SCNText(string:value>25 ? "ACE  +\(value-25)" : "ACE",extrusionDepth:0)
-            label.font = NSFont.monospacedSystemFont(ofSize:1,weight:.semibold); label.flatness = 0.2
-            let text = SCNNode(geometry:label); label.materials = [ink]
-            let bounds = label.boundingBox
-            text.simdPosition = V3(-Float(bounds.max.x-bounds.min.x)*0.5,2.35,0)
-            node.addChildNode(text)
-        }
+        hoverHeight = max(4,Float(model.boundingBox.max.y)+4)
+        model.addChildNode(node)
         updatePose(fighter)
     }
+
     func updatePose(_ fighter: Fighter) {
-        guard count>0 else { return }
-        // World-up placement avoids labels wobbling around a rolling fighter.
+        guard visible else { return }
         node.simdPosition = fighter.node.simdOrientation.inverse.act(V3(0,hoverHeight,0))
         node.isHidden = !fighter.active
     }
+
     func reset() {
-        count = 0; node.removeFromParentNode()
-        for child in node.childNodes { child.removeFromParentNode() }
+        node.removeFromParentNode()
     }
 }
 
 extension Dogfight {
-    // The title is global across both factions. A tied incumbent keeps it;
-    // without an incumbent, roster order makes the tie deterministic.
+    var aceHUDStatus: String {
+        if let acePilot {
+            let pilot = fighters[acePilot.index]
+            if pilot.active && pilot.generation == acePilot.generation {
+                return "★  CURRENT ACE   ·   KILLS \(pilot.enemyKills)   ·   ENCOUNTERS SURVIVED \(pilot.encountersSurvived)"
+            }
+        }
+        let vacant = "CURRENT ACE  VACANT   ·   KILLS —"
+        return aceKillRecord>0 ? vacant+"   ·   RECORD TO BEAT \(aceKillRecord)" : vacant
+    }
+
     func updateAce() {
-        longestEncounterStreak = max(longestEncounterStreak,fighters.map(\.encountersSurvived).max() ?? 0)
-        let qualified = fighters.indices.filter { fighters[$0].aceEligible }
-        let mostKills = qualified.map { fighters[$0].enemyKills }.max()
-        let leaders = qualified.filter { fighters[$0].enemyKills == mostKills }
-        var selected: Int?
-        if let current = acePilot, leaders.contains(current.index), fighters[current.index].generation == current.generation {
-            selected = current.index
-        } else { selected = leaders.first }
         let previous = acePilot
-        acePilot = selected.map { ($0,fighters[$0].generation) }
-        // Remove the previous marker before attaching its successor's marker.
-        for i in fighters.indices where i != selected {
-            fighters[i].isAce = false
-            fighters[i].tally.setCount(0,on:fighters[i])
+        var incumbent: Int?
+        if let previous {
+            let pilot = fighters[previous.index]
+            if pilot.active && pilot.generation == previous.generation {
+                incumbent = previous.index
+                aceKillRecord = max(aceKillRecord,pilot.enemyKills)
+            }
         }
-        if let selected {
-            let winner = fighters[selected]
+
+        var selected = incumbent
+        var bestKills = aceKillRecord
+        for i in fighters.indices where fighters[i].aceEligible && fighters[i].enemyKills>bestKills {
+            selected = i
+            bestKills = fighters[i].enemyKills
+        }
+        aceKillRecord = bestKills
+
+        let next = selected.map { (index:$0,generation:fighters[$0].generation) }
+        guard previous?.index != next?.index || previous?.generation != next?.generation else { return }
+        if let previous {
+            fighters[previous.index].isAce = false
+            fighters[previous.index].aceBadge.reset()
+        }
+        acePilot = next
+        if let next {
+            let winner = fighters[next.index]
             winner.isAce = true
-            // Three completed encounters plus the current encounter starts at 4.
-            winner.tally.setCount(winner.encountersSurvived+1,on:winner)
-        }
-        if let winner = acePilot, previous?.index != winner.index || previous?.generation != winner.generation {
+            winner.aceBadge.attach(to:winner)
             acePromotions += 1
-            if honouredAceGenerations[winner.index] != winner.generation {
+            if honouredAceGenerations[next.index] != next.generation {
                 acesEmerged += 1
-                honouredAceGenerations[winner.index] = winner.generation
+                honouredAceGenerations[next.index] = next.generation
             }
         }
     }
@@ -103,20 +109,29 @@ extension Dogfight {
     }
 
     func creditEncounter(surviving side: Int) {
-        let survivors = fighters.filter { $0.side == side && $0.active }
+        creditEncounter(survivingSides:[side])
+    }
+
+    func creditEncounter(survivingSides sides: [Int], replenish: Bool = true) {
+        let survivors = fighters.filter { sides.contains($0.side) && $0.active }
         guard !survivors.isEmpty else { return }
-        squadronEncounters[side] += 1
         encountersCompleted += 1
         for f in survivors {
             f.encountersSurvived += 1
+            longestEncounterStreak = max(longestEncounterStreak,f.encountersSurvived)
+        }
+        for side in sides where survivors.contains(where:{$0.side == side}) {
+            squadronEncounters[side] += 1
+            if replenish { refillVeteranSquadron(side:side) }
         }
         updateAce()
-        if squadronEncounters[side]>=2 {
-            let losses = fighters.filter { $0.side == side && $0.state == .destroyed }
-            if !losses.isEmpty {
-                for f in losses { f.replaceFaction(sideFactions[side]) }
-                deployReinforcements(side:side,topUp:true)
-            }
-        }
+    }
+
+    func refillVeteranSquadron(side: Int) {
+        guard squadronEncounters[side]>=2, sideCount(side)>0, !pendingSides.contains(side) else { return }
+        let losses = fighters.filter { $0.side == side && $0.state == .destroyed }
+        guard !losses.isEmpty else { return }
+        for f in losses { f.replaceFaction(sideFactions[side]) }
+        deployReinforcements(side:side,topUp:true)
     }
 }

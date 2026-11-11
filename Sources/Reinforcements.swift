@@ -30,7 +30,7 @@ extension Dogfight {
         guard !pendingSides.contains(side), roster.allSatisfy({$0.state == .destroyed}), !carriers.contains(where:{$0.side == side}) else { return }
         // Credit and stage the winning squadron's replacements first. Global
         // arrival scheduling then keeps the next enemy behind that deployment.
-        creditEncounter(surviving:1-side)
+        if !fleetTruce { creditEncounter(surviving:1-side) }
         squadronEncounters[side] = 0
         let previous = sideFactions[side]
         let options = Faction.allCases.filter { $0 != previous && $0 != sideFactions[1-side] }
@@ -46,6 +46,7 @@ extension Dogfight {
     }
 
     func updateReinforcements(_ dt: Float) {
+        guard !returningFromAtlantis else { return }
         // Only defeated factions rotate. Veteran top-ups are staged before their next opponent.
         for side in 0..<2 { requestReplacement(for:side) }
         for i in fleetRequests.indices.reversed() {
@@ -110,7 +111,8 @@ extension Dogfight {
                 let distance: Float = faction == .earth ? 1450 : 3300
                 position = V3(sin(a)*distance,faction == .earth ? 600 : 900,cos(a)*distance)
                 let radius: Float = (faction == .shadow ? 210 : (faction == .cylon ? 158 : 130))*6
-                if carriers.allSatisfy({simd_distance($0.origin,position)>2100}) && simd_distance(position,planetPosition)>radius+planetRadius+250 { break }
+                let clearOfCity = atlantis.map { simd_distance($0.position,position)>radius+Atlantis.shieldRadius+500 } ?? true
+                if clearOfCity && carriers.allSatisfy({simd_distance($0.origin,position)>2100}) && simd_distance(position,planetPosition)>radius+planetRadius+250 { break }
             }
             let direction = unit(-position)
             let ship = Carrier(faction:faction,side:side,origin:position,forward:direction,start:start,squadron:squadron)

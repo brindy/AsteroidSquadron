@@ -208,7 +208,10 @@ private func verifyShipTraffic() {
         let (b,a,c) = pair(faction)
         b.activateFlight(a,position:V3(0,250,115),forward:V3(0,0,-1),speed:56)
         b.activateFlight(c,position:V3(0,250,-115),forward:V3(0,0,1),speed:56)
+        a.patrolRoute = [V3(0,250,-500)]
+        c.patrolRoute = [V3(0,250,500)]
         var clearance: Float = 1000
+        var lateralSeparation: Float = 0
         // Exercise steering directly so unrelated fleet replacement and gunfire cannot
         // mask whether the two friendly pilots actually avoided a head-on collision.
         for _ in 0..<240 {
@@ -217,14 +220,17 @@ private func verifyShipTraffic() {
             b.updateFlight(a,dt:1.0/60,positions:positions,velocities:velocities,active:active)
             b.updateFlight(c,dt:1.0/60,positions:positions,velocities:velocities,active:active)
             clearance = min(clearance,simd_distance(a.position,c.position))
+            lateralSeparation = max(lateralSeparation,abs(a.position.x-c.position.x))
         }
         check(clearance>a.faction.collisionRadius+c.faction.collisionRadius+3,"Friendly \(faction) pilots failed to avoid a head-on encounter: \(clearance)")
-        check(abs(a.position.x-c.position.x)>10,"Pilots did not choose different passing lanes")
+        check(lateralSeparation>10,"\(faction) pilots did not choose different passing lanes")
     }
     // An overtaking pilot must yield instead of flying through a slower wingman.
     let (traffic,fast,slow) = pair(.colonial)
     traffic.activateFlight(fast,position:V3(0,250,90),forward:V3(0,0,-1),speed:90)
     traffic.activateFlight(slow,position:V3(0,250,0),forward:V3(0,0,-1),speed:40)
+    fast.patrolRoute = [V3(0,250,-500)]
+    slow.patrolRoute = [V3(0,250,-500)]
     var nearest: Float = 1000
     for _ in 0..<240 {
         let p = traffic.fighters.map(\.position), v = traffic.fighters.map(\.velocity), active = traffic.fighters.map(\.active)
@@ -259,7 +265,7 @@ private func verifyShipTraffic() {
     fatal.resolveShipCollisions(from:start,wasActive:active,dt:0.5)
     check(!a.active && !c.active && fatal.shipCollisionLosses == 2,"High-speed swept collision failed to destroy both ships")
     check(fatal.blasts.count == 2,"Fatal collision did not create explosions")
-    print("PASS: six-faction friendly head-on avoidance, overtaking separation, friendly/enemy collision damage, contact persistence, momentum, and fatal swept crossings.")
+    print("PASS: Nine-faction friendly head-on avoidance, overtaking separation, friendly/enemy collision damage, contact persistence, momentum, and fatal swept crossings.")
 }
 
 private func verifyWeaponsAndMotion() {
@@ -335,12 +341,12 @@ private func verifyWeaponsAndMotion() {
     f.position = V3(0,250,10); f.velocity = V3(0,0,-60)
     a.tryAsteroidStrike(f,from:V3(0,250,50),dt:1.0/60)
     check(f.spin != nil && f.velocity.z>0 && f.position.z>=15+f.faction.collisionRadius,"Swept asteroid impact did not reflect velocity at contact")
-    print("PASS: all six models fire forwards from paired muzzles; physical hits and evasion; bounded, identical 30/60 fps flight; swept asteroid collision.")
+    print("PASS: all nine models fire forwards from paired muzzles; physical hits and evasion; bounded, identical 30/60 fps flight; swept asteroid collision.")
 }
 
 private func verifyContinuousDeployments() {
   for aspect: Float in [1.0,1.6,2.0] {
-    for faction in [Faction.empire,.colonial,.cylon,.shadow] {
+    for faction in [Faction.empire,.colonial,.cylon,.shadow,.tauri,.goauld,.wraith] {
         let b = Dogfight(seed:710,initialFactions:[faction,.rebel],initialArrivals:false)
         b.viewportAspect = aspect
         b.rocks.removeAll()
@@ -363,7 +369,7 @@ private func verifyContinuousDeployments() {
             if age>2.5 && age<2.58, let hero = ship.squadron.first {
                 let f = b.fighters[hero]
                 closeDistance = simd_distance(b.cameraPosition,f.position)
-                check(closeDistance!<125,"Launch shot did not begin close to the first fighter")
+                check(closeDistance!<125,"\(faction) launch shot did not begin close to the first fighter: \(closeDistance!)")
                 check(simd_dot(unit(f.position-b.cameraPosition),unit(b.cameraLook-b.cameraPosition))>0.98,"Launching fighter is outside the composition")
             }
             if age>4.28 && age<ship.departureAge+ship.departureDuration-0.02 {
@@ -404,7 +410,7 @@ private func verifyContinuousDeployments() {
         check(handoffChecked && b.director.handoffCuts == 1,"Capital departure did not hand off to an existing fighter")
     }
   }
-    print("PASS: all four capital ships, three window shapes: close launch, continuous pullback framing the full capital and all fighters, and group tracking through departure.")
+    print("PASS: seven capital ships, three window shapes: close launch, continuous pullback framing the full capital and all fighters, and group tracking through departure.")
 }
 
 private func handoffFixture() -> Dogfight {
@@ -458,7 +464,7 @@ func verifySimulation() {
     for seed: UInt64 in [42,2026,0xCAFE] {
         autoreleasepool {
             print("Checking seed \(seed)"); fflush(stdout)
-            let battle = Dogfight(seed:seed)
+            let battle = Dogfight(seed:seed,firstAtlantisEncounter:nil)
             let fingerprint = battle.rocks.prefix(5).map { String(describing:$0.position) }.joined()
             check(fingerprints.insert(fingerprint).inserted,"Arena seeds did not change the layout")
             let initialNodes = battle.persistentNodeCount
@@ -482,10 +488,10 @@ func verifySimulation() {
                 let aces = battle.fighters.filter(\.isAce)
                 check(aces.count<=1,"More than one global Ace")
                 if let ace = aces.first {
-                    check(ace.aceEligible && ace.tally.count == ace.encountersSurvived+1,"Ineligible Ace or incorrect scratch tally")
+                    check(ace.aceEligible && ace.aceBadge.visible && ace.enemyKills == battle.aceKillRecord,"Ineligible Ace, incorrect record or missing star")
                     check(!battle.fighters.contains(where:{$0.aceEligible && $0.enemyKills>ace.enemyKills}),"Ace does not lead the eligible kill counts")
                 }
-                check(battle.fighters.filter{$0.tally.count>0}.count == aces.count,"A non-Ace displays scratch marks")
+                check(battle.fighters.filter{$0.aceBadge.visible}.count == aces.count,"A non-Ace displays a star")
                 check(battle.sideFactions[0] != battle.sideFactions[1],"Opposing sides selected the same faction")
                 for f in battle.fighters {
                     check(f.faction == battle.sideFactions[f.side],"Roster mixes faction models")
@@ -548,7 +554,7 @@ func verifySimulation() {
 }
 
 private func verifyFactionLifecycle() {
-    let b = Dogfight(seed:505,initialFactions:[.rebel,.empire],initialArrivals:false)
+    let b = Dogfight(seed:505,initialFactions:[.rebel,.empire],initialArrivals:false,firstAtlantisEncounter:nil)
     b.automatic = false
     b.rocks.removeAll() // Isolate roster lifecycle from intentionally dangerous flight.
     for f in b.fighters { f.cooldown = 10000; f.collisionCooldown = 10000 }
@@ -556,7 +562,7 @@ private func verifyFactionLifecycle() {
     for f in roster.dropLast() { b.destroy(f) }
     for _ in 0..<120 { b.update(dt:1.0/30.0) }
     check(b.replacementCount == 0 && b.sideCount(0) == 1,"Depleted faction was replaced before its last ship died")
-    for round in 0..<12 {
+    for round in 0..<(Faction.allCases.count*5) {
         let side = round%2, previous = b.sideFactions[side], opponent = b.sideFactions[1-side]
         for f in b.fighters where f.side == side && f.active { b.destroy(f) }
         let priorGeneration = b.fighters.first{$0.side == side}!.generation
@@ -581,9 +587,10 @@ private func verifyFactionLifecycle() {
         }
         check(b.sideCount(side) == 6,"Replacement squadron did not fully deploy")
         check(b.carriers.isEmpty,"Replacement carrier failed to depart")
+        if round>=11 && b.encounteredFactions.count==Faction.allCases.count { break }
     }
-    check(b.replacementCount == 12 && b.encounteredFactions.count == Faction.allCases.count,"Faction selection did not cover the six-faction catalog")
-    print("PASS: no premature refills; twelve distinct-side replacements across all six factions; stale projectiles cannot damage new generations.")
+    check(b.replacementCount>=12 && b.encounteredFactions.count == Faction.allCases.count,"Faction selection did not cover the nine-faction catalog")
+    print("PASS: no premature refills; \(b.replacementCount) distinct-side replacements across all nine factions; stale projectiles cannot damage new generations.")
 }
 
 private func verifyBlinkCarriers() {

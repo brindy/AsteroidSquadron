@@ -47,7 +47,7 @@ R: new arena     B: planet biome                   ?: all controls
 
 Updates and source: https://github.com/brindy/AsteroidSquadron
 
-Unofficial fan project. Star Wars, Battlestar Galactica and Babylon 5 names
+Unofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate names
 and designs belong to their respective owners.
 INSTALL
 package_dmg="$package_output/Asteroid-Squadron-$package_version-arm64.dmg"
