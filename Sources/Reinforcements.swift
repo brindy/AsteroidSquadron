@@ -27,16 +27,28 @@ extension Dogfight {
 
     func requestReplacement(for side: Int) {
         let roster = fighters.filter { $0.side == side }
-        guard !pendingSides.contains(side), roster.allSatisfy({$0.state == .destroyed}), !carriers.contains(where:{$0.side == side}) else { return }
+        guard atlantisAttackingSide == nil, !pendingSides.contains(side), roster.allSatisfy({$0.state == .destroyed}),
+              !carriers.contains(where:{$0.side == side}) else { return }
+        let winner = 1-side
+        if let next = nextAtlantisEncounter, sideCount(winner)>0, encountersCompleted+1>=next {
+            creditEncounter(survivingSides:[winner],replenish:false)
+            atlantisAttackingSide = winner
+            atlantisTopUpPending = true
+            return
+        }
         // Credit and stage the winning squadron's replacements first. Global
         // arrival scheduling then keeps the next enemy behind that deployment.
-        if !fleetTruce { creditEncounter(surviving:1-side) }
+        creditEncounter(surviving:winner)
+        queueFactionReplacement(for:side)
+    }
+
+    func queueFactionReplacement(for side: Int) {
         squadronEncounters[side] = 0
         let previous = sideFactions[side]
         let options = Faction.allCases.filter { $0 != previous && $0 != sideFactions[1-side] }
         let next = options[rng.index(options.count)]
         sideFactions[side] = next
-        for f in roster { f.replaceFaction(next); f.orbitRate = rng.range(0.17,0.21) }
+        for f in fighters where f.side == side { f.replaceFaction(next); f.orbitRate = rng.range(0.17,0.21) }
         pendingSides.insert(side)
         fleetRequests.append(FleetRequest(side:side,countdown:rng.range(2.5,4.5)))
         replacementCount += 1
@@ -47,8 +59,18 @@ extension Dogfight {
 
     func updateReinforcements(_ dt: Float) {
         guard !returningFromAtlantis else { return }
+        if let side = atlantisAttackingSide {
+            // If Atlantis wipes out the assault wave, only its original
+            // opponent can return. The empty rival side stays out of play.
+            if atlantisSiegeActive && sideCount(side)==0 && arrivingCount==0 && carriers.isEmpty {
+                let reserves = atlantisReinforcements(for:side)
+                deploySquadron(reserves,side:side)
+            }
+            return
+        }
         // Only defeated factions rotate. Veteran top-ups are staged before their next opponent.
         for side in 0..<2 { requestReplacement(for:side) }
+        guard atlantisAttackingSide == nil else { return }
         for i in fleetRequests.indices.reversed() {
             fleetRequests[i].countdown -= dt
             if fleetRequests[i].countdown<=0 {
@@ -83,19 +105,60 @@ extension Dogfight {
         default: (distance,offset,course) = (2340,450,1.2)
         }
         let origin = radial*distance+tangent*(sign*(offset+rng.range(-50,50)))
-            + V3(0,planetPosition.y*0.32+rng.range(120,200),0)
+            + V3(0,unit(planetPosition).y*1500+rng.range(120,200),0)
         let forward = unit(-radial-tangent*course)
         return (origin,forward)
     }
 
     func deployReinforcements(side: Int, topUp: Bool = false) {
-        let roster = fighters.indices.filter { fighters[$0].side == side }
+        let roster = fighters.indices.filter { fighters[$0].side == side && !fighters[$0].isSiegeReserve }
         let squadron = topUp ? roster.filter { fighters[$0].state == .destroyed } : roster
         guard !squadron.isEmpty, squadron.allSatisfy({fighters[$0].state == .destroyed}) else { return }
         if topUp {
-            guard roster.contains(where:{fighters[$0].active}), squadronEncounters[side]>=2 else { return }
+            guard sideCount(side)>0, squadronEncounters[side]>=2 else { return }
             topUpWaves += 1
         }
+        deploySquadron(squadron,side:side)
+    }
+
+    func atlantisReinforcements(for side: Int) -> [Int] {
+        let faction = sideFactions[side]
+        let slots = fighters.indices.filter { fighters[$0].side == side }
+        let missing = slots.filter { !fighters[$0].isSiegeReserve && fighters[$0].state == .destroyed }
+        let reserveSlots = slots.filter { fighters[$0].isSiegeReserve }
+        var squadron = missing
+        if squadron.isEmpty {
+            // A full squadron can still receive a reserve pilot at each beat.
+            if let reserve = reserveSlots.first(where:{fighters[$0].state == .destroyed}) {
+                squadron = [reserve]
+            } else if reserveSlots.count<2 {
+                let reserve = Fighter(faction:faction,side:side,pair:6+reserveSlots.count,trailing:true,
+                                      cooldown:1.2,isSiegeReserve:true)
+                scene.rootNode.addChildNode(reserve.node)
+                scene.rootNode.addChildNode(reserve.warp)
+                squadron = [fighters.count]
+                fighters.append(reserve)
+                persistentNodeCount += 2
+            }
+        }
+        for i in squadron { fighters[i].replaceFaction(faction) }
+        if !squadron.isEmpty { topUpWaves += 1 }
+        return squadron
+    }
+
+    func stageHangarLaunch(_ ship: Carrier) {
+        for (slot,index) in ship.squadron.enumerated() {
+            let f = fighters[index]
+            f.state = .arriving; f.entry = ship.portalOnly ? .jumpWindow : .hangar
+            f.entryTime = ship.start+2.5+Float(slot)*0.35
+            f.entryPosition = ship.launchPosition(slot:slot,at:f.entryTime-ship.start)
+            f.entryForward = ship.forward; f.formationSlot = slot; f.arrival = 0
+            f.hitPoints = 6; f.cooldown = 1.2; f.warp.isHidden = true; f.collisionCooldown = 25
+        }
+    }
+
+    func deploySquadron(_ squadron: [Int], side: Int) {
+        guard !squadron.isEmpty else { return }
         let faction = sideFactions[side]
         let start = max(time,nextArrivalTime)
         nextArrivalTime = start+(faction == .shadow ? 7.2 : 6.5)
@@ -118,13 +181,7 @@ extension Dogfight {
             let ship = Carrier(faction:faction,side:side,origin:origin,forward:heading,start:start,squadron:squadron)
             carriers.append(ship)
             scene.rootNode.addChildNode(ship.node); scene.rootNode.addChildNode(ship.warp)
-            for (slot,index) in squadron.enumerated() {
-                let f = fighters[index]
-                f.state = .arriving; f.entry = faction == .earth ? .jumpWindow : .hangar; f.entryTime = start+2.5+Float(slot)*0.35
-                f.entryPosition = ship.launchPosition(slot:slot,at:f.entryTime-start)
-                f.entryForward = heading; f.formationSlot = slot; f.arrival = 0
-                f.hitPoints = 6; f.cooldown = 1.2; f.warp.isHidden = true; f.collisionCooldown = 25
-            }
+            stageHangarLaunch(ship)
         }
         for side in 0..<2 {
             assignTargets(fighters.indices.filter{fighters[$0].side == side && fighters[$0].state != .destroyed})

@@ -493,7 +493,62 @@ private func verifyArrivalHandoff() {
     print("PASS: nearest existing pilot, rear camera pose, incoming aim, destroyed-anchor fallback, generation protection, manual control and no-existing-ship fallback.")
 }
 
+func verifyCinematicOptics(renderDirectory: URL? = nil) {
+    let b = Dogfight(seed:7304,initialFactions:[.rebel,.empire],initialArrivals:false,firstAtlantisEncounter:nil)
+    let planetDirection = unit(b.planetPosition)
+    let lateral = unit(simd_cross(planetDirection,V3(0,1,0)))
+    let start = b.planetPosition
+    let far = start-lateral*2000
+    let angularShift = acos(max(-1,min(1,simd_dot(unit(start),unit(far)))))
+    let a = asin(b.planetRadius/simd_length(start))
+    let c = asin(b.planetRadius/simd_length(far))
+    check(angularShift<0.04 && abs(c/a-1)<0.025,"The planet has local-scale motion parallax")
+    check(sin(a)>0.19,"The distant planet lost its epic angular size")
+    let hero = b.fighters[0]
+    for f in b.fighters where f !== hero { f.state = .destroyed; f.node.isHidden = true }
+    for rock in b.rocks { rock.node.removeFromParentNode() }
+    b.rocks.removeAll()
+    b.activateFlight(hero,position:V3(0,220,0),forward:planetDirection,speed:48)
+    let backdrop = b.fighters[1]
+    backdrop.node.isHidden = false
+    backdrop.node.simdPosition = hero.position+planetDirection*95+lateral*28
+    backdrop.node.simdOrientation = hero.node.simdOrientation
+    backdrop.node.simdScale = V3(repeating:4)
+    b.cameraIndex = 0; b.followedIndex = 0; b.automatic = false
+    b.director.prepareShot(in:b); b.cut = true; b.updateCamera(0)
+    let lens = b.camera.camera!
+    let focus = simd_dot(hero.position-b.cameraPosition,unit(b.cameraLook-b.cameraPosition))
+    check(lens.wantsDepthOfField && abs(Float(lens.focusDistance)-focus)<0.01,
+          "The pursuit camera focused past its fighter")
+    let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)
+    renderer.scene = b.scene; renderer.pointOfView = b.camera
+    func pixels(_ name: String) -> NSBitmapImageRep {
+        let image = renderer.snapshot(atTime:0,with:NSSize(width:1120,height:700),antialiasingMode:.multisampling2X)
+        let bitmap = NSBitmapImageRep(data:image.tiffRepresentation!)!
+        if let renderDirectory {
+            try! bitmap.representation(using:.png,properties:[:])!.write(to:renderDirectory.appendingPathComponent(name+".png"))
+        }
+        return bitmap
+    }
+    let focused = pixels("lens-subject-focus")
+    lens.wantsDepthOfField = false
+    let deep = pixels("lens-deep-focus")
+    var changed = 0
+    for y in stride(from:0,to:focused.pixelsHigh,by:3) {
+        for x in stride(from:0,to:focused.pixelsWide,by:3) {
+            let p = focused.colorAt(x:x,y:y)!.usingColorSpace(.deviceRGB)!
+            let q = deep.colorAt(x:x,y:y)!.usingColorSpace(.deviceRGB)!
+            if abs(p.redComponent-q.redComponent)+abs(p.greenComponent-q.greenComponent)+abs(p.blueComponent-q.blueComponent)>0.03 {
+                changed += 1
+            }
+        }
+    }
+    check(changed>100,"The rendered camera did not produce visible depth of field")
+    print("PASS: a large distant planet with restrained parallax; fighter focus matches the subject; native depth of field changes \(changed) sampled pixels.")
+}
+
 func verifySimulation() {
+    verifyCinematicOptics()
     verifyVeteransAndSkybox()
     verifyBabylon()
     verifyArrivalHandoff()
@@ -698,6 +753,7 @@ private func verifyFormationAndControl() {
 
 func renderReview(directory: URL) {
     try! FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+    verifyCinematicOptics(renderDirectory:directory)
     let battle = Dogfight(seed:requestedSeed(),initialFactions:[.rebel,.empire],initialArrivals:false)
     battle.automatic = false
     let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)

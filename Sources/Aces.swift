@@ -129,7 +129,7 @@ extension Dogfight {
 
     func refillVeteranSquadron(side: Int) {
         guard squadronEncounters[side]>=2, sideCount(side)>0, !pendingSides.contains(side) else { return }
-        let losses = fighters.filter { $0.side == side && $0.state == .destroyed }
+        let losses = fighters.filter { $0.side == side && !$0.isSiegeReserve && $0.state == .destroyed }
         guard !losses.isEmpty else { return }
         for f in losses { f.replaceFaction(sideFactions[side]) }
         deployReinforcements(side:side,topUp:true)

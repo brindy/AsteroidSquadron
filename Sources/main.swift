@@ -223,6 +223,7 @@ final class Fighter {
     var pivotCount = 0
     var burstShotsLeft = 0
     let pair: Int
+    let isSiegeReserve: Bool
     let trailing: Bool
     var position = V3.zero
     var forward = V3(0, 0, -1)
@@ -244,8 +245,9 @@ final class Fighter {
     var collisionCooldown: Float = 20
     var formationHold: Float { (entry == .hyperspace || entry == .jumpWindow) ? 2.1+Float(formationSlot)*0.13 : 0.8+Float(formationSlot)*0.08 }
     let warp = SCNNode()
-    init(faction: Faction, side: Int, pair: Int, trailing: Bool, cooldown: Float) {
+    init(faction: Faction, side: Int, pair: Int, trailing: Bool, cooldown: Float, isSiegeReserve: Bool = false) {
         self.faction = faction; self.side = side; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
+        self.isSiegeReserve = isSiegeReserve
         node.addChildNode(faction.fighterModel())
         scanner = node.childNode(withName:"scanner",recursively:true)
         cacheMuzzles()
@@ -395,6 +397,8 @@ final class Dogfight {
     var encountersCompleted = 0
     var atlantis: Atlantis?
     var nextAtlantisEncounter: Int?
+    var atlantisAttackingSide: Int?
+    var atlantisTopUpPending = false
     var returningFromAtlantis = false
     var atlantisRegroupUntil: Float?
     var acePromotions = 0
@@ -478,8 +482,11 @@ final class Dogfight {
         scene.lightingEnvironment.intensity = 0.65
         camera.camera = SCNCamera()
         camera.camera!.zNear = 0.3
-        camera.camera!.zFar = 12000
+        camera.camera!.zFar = 85000
+        camera.camera!.sensorHeight = 240
         camera.camera!.fieldOfView = 58
+        camera.camera!.wantsDepthOfField = true
+        camera.camera!.focalBlurSampleCount = 12
         camera.camera!.wantsHDR = true
         camera.camera!.bloomIntensity = 0.7
         camera.camera!.bloomThreshold = 1.1
@@ -591,11 +598,13 @@ final class Dogfight {
         }
     }
     func makePlanet() {
-        planetRadius = rng.range(800,1080)
+        // Keep a large angular diameter with very little motion parallax
+        // across the arena, even when a camera orbits a carrier.
+        planetRadius = rng.range(800,1080)*14
         _ = rng.range(0.5,1) // Keep the existing arena random stream stable.
         let variation = rng.range(-1.1,1.1)
         let a = atan2(-planetSunDirection.x,-planetSunDirection.z)+variation
-        planetPosition = V3(sin(a)*4650,rng.range(210,1100),cos(a)*4650)
+        planetPosition = V3(sin(a)*4650,rng.range(210,1100),cos(a)*4650)*12
         let world = ProceduralPlanet(seed:seed,radius:planetRadius,sun:planetSunDirection)
         world.node.simdPosition = planetPosition
         scene.rootNode.addChildNode(world.node); planet = world
@@ -1045,6 +1054,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             } else if battle.returningFromAtlantis {
                 eventStatus.stringValue = battle.atlantisRegroupUntil == nil ? "ATLANTIS LOST   /   RETURN TO ASTEROID FIELD" : "ATLANTIS LOST   /   BELT PATROL"
                 eventStatus.textColor = orange
+            } else if battle.atlantisAttackingSide != nil {
+                eventStatus.stringValue = "SQUADRON TOP-UP   /   ATLANTIS APPROACHING"
+                eventStatus.textColor = cyan
             } else if let request = battle.fleetRequests.min(by:{$0.countdown<$1.countdown}) {
                 eventStatus.stringValue = String(format:"%@ INBOUND / ETA %02d SEC",battle.sideFactions[request.side].title,max(0,Int(ceil(request.countdown))))
                 eventStatus.textColor = cyan

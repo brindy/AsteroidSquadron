@@ -110,6 +110,8 @@ final class CinematicDirector {
             caption = b.atlantis?.assault?.ship.faction.siegeCapitalName
             detail = "CAPITAL SHIP INBOUND / ATLANTIS UNDER SIEGE"
         case .atlantisBombardment:
+            carrierDollyDistance = 0
+            carrierLaunchShot = false
             caption = "CAPITAL BOMBARDMENT"; detail = "HEAVY BATTERIES FIRING ON ATLANTIS"
         case .atlantisCounterstrike:
             caption = "ANCIENT DRONE COUNTERSTRIKE"; detail = "SWARM LAUNCHING FROM THE CENTRAL TOWER"
@@ -440,6 +442,10 @@ final class CinematicDirector {
         let width = max(0.65,min(1,b.viewportAspect/1.45))
         switch event {
         case .atlantisBombardment:
+            if carrierLaunchShot {
+                let launch = carrierLaunchFrame(ship,in:b)
+                return (launch.position,launch.look,52)
+            }
             let focus = mix(city.position,ship.origin,0.54)+up*36
             return (focus+right*2490/width+up*590-ship.forward*110,focus,59)
         case .atlantisCounterstrike where eventAge<2.05:
@@ -454,6 +460,19 @@ final class CinematicDirector {
             let offset = unit(ship.forward*0.63+right*0.85+up*0.30)
             return (focus+offset*(ship.worldRadius*1.86+150+eventAge*83)/width,focus,53)
         }
+    }
+
+    private func updateFocus(on subject: V3, aperture: Float, dt: Float, in b: Dogfight) {
+        let lens = b.camera.camera!
+        let forward = unit(b.cameraLook-b.camera.simdPosition)
+        let distance = max(3,simd_dot(subject-b.camera.simdPosition,forward))
+        // Interpolate optical power so a change in distant scenery cannot
+        // make the focus plane jump. Hard cuts set focus on the new subject.
+        let response: Float = b.cut ? 1 : 1-exp(-3*dt)
+        let previous = 1/max(3,Float(lens.focusDistance))
+        lens.focusDistance = CGFloat(1/(previous+(1/distance-previous)*response))
+        let oldAperture = Float(lens.fStop)
+        lens.fStop = CGFloat(oldAperture+(aperture-oldAperture)*response)
     }
 
     func carrierLaunchFrame(_ ship: Carrier, in b: Dogfight) -> (position: V3, look: V3) {
@@ -522,6 +541,8 @@ final class CinematicDirector {
         var roll: Float = 0
         var revealingArrival = false
         var trackingFormation = false
+        var focusPoint: V3?
+        var aperture: Float = 3.6
         if event == .formation, let flight = arrivalFlight {
             let age = b.time-flight.start
             let right = unit(simd_cross(flight.forward,up))
@@ -531,6 +552,7 @@ final class CinematicDirector {
                 let anchor = flight.origin+flight.forward*max(0,age-1.25)*28
                 (desired,look,fov,roll) = planetaryReveal(origin:flight.origin,subject:anchor,points:points,
                     distance:285,age:age,cue:1.14,in:b)
+                focusPoint = anchor
                 revealingArrival = true
             } else {
                 if age-dt<closeAt { b.cut = true }
@@ -562,6 +584,7 @@ final class CinematicDirector {
                     desired = frame.position; look = frame.look; fov = 52
                 } else {
                     (desired,look,fov,roll) = carrierReveal(ship,age:age,in:b)
+                    focusPoint = anchor
                     revealingArrival = true
                 }
                 if age>ship.departureAge+ship.departureDuration {
@@ -585,11 +608,13 @@ final class CinematicDirector {
                 endEvent(in:b); update(0,in:b); return
             }
             desired = frame.position; look = frame.look; fov = frame.fov
+            aperture = 7.1
         } else if event == .atlantisCapitalArrival {
             guard let assault = b.atlantis?.assault, !assault.finished else {
                 endEvent(in:b); update(0,in:b); return
             }
             (desired,look,fov,roll) = carrierReveal(assault.ship,age:b.time-assault.ship.start,in:b)
+            focusPoint = assault.ship.origin
             revealingArrival = true
         } else if event == .atlantisBombardment || event == .atlantisCounterstrike || event == .atlantisCapitalDestroyed {
             guard let city = b.atlantis, let assault = city.assault, !assault.finished else {
@@ -600,14 +625,22 @@ final class CinematicDirector {
                 detail = "DRONES MAKING REPEATED PASSES THROUGH THE HULL"
                 b.cameraChanged?()
             }
+            if event == .atlantisBombardment && !carrierLaunchShot && !assault.ship.squadron.isEmpty &&
+                b.time-assault.ship.start>=2.24 {
+                carrierLaunchShot = true; b.cut = true
+                detail = "SQUADRON LAUNCH / CAPITAL SHIP FIRING"
+                b.cameraChanged?()
+            }
             let frame = assaultFrame(assault,city:city,in:b)
             desired = frame.position; look = frame.look; fov = frame.fov
+            if event == .atlantisCounterstrike && eventAge<2.05 { focusPoint = city.dronePort }
         } else if event == .atlantisArrival || event == .atlantisBreach || event == .atlantisDestruction {
             guard let city = b.atlantis, eventAge<4.8 else {
                 endEvent(in:b); update(0,in:b); return
             }
             if event == .atlantisArrival {
                 (desired,look,fov,roll) = atlantisReveal(city,age:b.time-city.arrivalTime,in:b)
+                focusPoint = city.position
                 revealingArrival = true
             } else {
                 let frame = atlantisFrame(city,in:b,progress:eventAge/4.8)
@@ -625,6 +658,7 @@ final class CinematicDirector {
             look = shot.launchFocus ?? (fighter.position+fighter.velocity*0.16)
             let range = simd_distance(desired,fighter.position)
             fov = shot.launchFocus != nil ? 50 : max(21,min(38,38-range*0.018))
+            aperture = 4.8
         } else if event == .atlantisAttack {
             let f = b.fighters[b.followedIndex]
             guard b.atlantisSiegeActive, f.active, f.spin == nil, eventAge<3.1 else {
@@ -634,6 +668,7 @@ final class CinematicDirector {
             let right = unit(simd_cross(heading,up))
             desired = f.position-heading*48+right*17+up*12
             look = f.position+heading*26
+            focusPoint = f.position
             fov = 51
         } else if event == .attack {
             let f = b.fighters[b.followedIndex]
@@ -673,6 +708,8 @@ final class CinematicDirector {
             let enemy = f.attackTarget.flatMap { b.fighters[$0].active ? b.fighters[$0] : nil } ?? b.fighters.filter { $0.active && $0.faction != f.faction }.min { simd_distance_squared($0.position,f.position)<simd_distance_squared($1.position,f.position) }
             let enemyAhead = enemy.map { simd_distance($0.position,f.position)<150 && simd_dot(unit($0.position-f.position),heading)>0.2 } ?? false
             let action = enemyAhead ? mix(f.position+heading*10,enemy!.position,0.35) : f.position+heading*12
+            aperture = b.cameraIndex == 2 ? 5.6 : 2.8
+            if [0,1,3,4].contains(b.cameraIndex) && f.active { focusPoint = f.position }
             switch b.cameraIndex {
             case 0:
                 desired = f.position-heading*30+right*10+up*6
@@ -712,7 +749,7 @@ final class CinematicDirector {
             b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
         } else {
             damp(&b.cameraPosition,velocity:&velocity,target:desired,frequency:7,dt:dt)
-            if (event == .carrierArrival && carrierLaunchShot) || revealingArrival || trackingFormation {
+            if ((event == .carrierArrival || event == .atlantisBombardment) && carrierLaunchShot) || revealingArrival || trackingFormation {
                 // The launch and reveal shots compute their aim from the framing.
                 b.cameraLook = look; lookVelocity = .zero
             } else { damp(&b.cameraLook,velocity:&lookVelocity,target:look,frequency:9,dt:dt) }
@@ -724,6 +761,7 @@ final class CinematicDirector {
         b.camera.look(at:SCNVector3(b.cameraLook),up:SCNVector3(cameraUp),localFront:SCNVector3(0,0,-1))
         let old = Float(b.camera.camera!.fieldOfView)
         b.camera.camera!.fieldOfView = CGFloat(b.cut || revealingArrival ? fov : old+(fov-old)*(1-exp(-dt*2)))
+        updateFocus(on:focusPoint ?? b.cameraLook,aperture:aperture,dt:dt,in:b)
         b.cut = false
     }
 }

@@ -103,7 +103,7 @@ extension Dogfight {
             lasers[i].node.simdPosition = lasers[i].position
             var fraction: Float = 2
             var victim: Fighter?
-            for (j,f) in fighters.enumerated() where !lasers[i].targetsAtlantis && f.active && f.side != lasers[i].sourceSide && f.generation == lasers[i].generations[j] {
+            for (j,f) in fighters.enumerated() where !fleetTruce && !lasers[i].targetsAtlantis && f.active && f.side != lasers[i].sourceSide && lasers[i].generations.indices.contains(j) && f.generation == lasers[i].generations[j] {
                 for (center,radius) in f.faction.hitVolumes {
                     let world = f.node.simdConvertPosition(center,to:nil)
                     if let hit = sphereImpact(from:from,to:to,center:world,radius:radius), hit<fraction { fraction = hit; victim = f }

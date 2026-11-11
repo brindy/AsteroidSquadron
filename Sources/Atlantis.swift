@@ -16,6 +16,7 @@ final class Atlantis {
     let node = SCNNode()
     let city = SCNNode()
     let position: V3
+    let attackingSide: Int
     var dronePort: V3 { position+V3(0,Self.towerTip+2,0) }
     let arrivalTime: Float
     let shield: SCNNode
@@ -32,8 +33,9 @@ final class Atlantis {
     var drones: [AncientDrone] = []
     var assault: AtlantisAssault?
 
-    init(position: V3, time: Float, seed: UInt64) {
+    init(position: V3, time: Float, seed: UInt64, attackingSide: Int) {
         self.position = position
+        self.attackingSide = attackingSide
         arrivalTime = time
         nextDroneTime = time+3
         node.name = "atlantis"
@@ -295,10 +297,9 @@ final class AncientDrone {
 
 extension Dogfight {
     var atlantisSiegeActive: Bool { atlantis?.intact == true }
-    var fleetTruce: Bool { atlantisSiegeActive || returningFromAtlantis }
+    var fleetTruce: Bool { atlantisAttackingSide != nil }
 
-    func startAtlantisSiege() {
-        guard atlantis == nil, !returningFromAtlantis else { return }
+    private func startAtlantisSiege(attackingSide: Int) {
         // Stage off to one side of the planet-facing gap so later fighter
         // deployments can still use the lanes on either side of the sightline.
         let towardPlanet = unit(V3(planetPosition.x,0,planetPosition.z))
@@ -309,7 +310,7 @@ extension Dogfight {
         let arrival = (0...5).map { station+V3(0,Float($0)*320,0) }.first { point in
             fighters.allSatisfy { !$0.active || simd_distance($0.position,point)>clearance }
         } ?? station+V3(0,1920,0)
-        let city = Atlantis(position:arrival,time:time,seed:seed &+ UInt64(encountersCompleted))
+        let city = Atlantis(position:arrival,time:time,seed:seed &+ UInt64(encountersCompleted),attackingSide:attackingSide)
         atlantis = city
         city.node.opacity = 0
         scene.rootNode.addChildNode(city.node)
@@ -357,12 +358,17 @@ extension Dogfight {
         if city.hullPoints<=0 {
             city.destroyedAt = time
             returningFromAtlantis = true
-            creditEncounter(survivingSides:[0,1],replenish:false)
+            creditEncounter(survivingSides:[city.attackingSide],replenish:false)
             if nextAtlantisEncounter != nil { nextAtlantisEncounter = encountersCompleted+10 }
             for drone in city.drones { drone.node.removeFromParentNode() }
             city.drones.removeAll()
             city.droneVolley = nil
-            city.assault?.removeNodes()
+            if let assault = city.assault {
+                for index in assault.ship.squadron where fighters[index].state == .arriving {
+                    fighters[index].state = .destroyed
+                }
+                assault.removeNodes()
+            }
             for fighter in fighters {
                 fighter.patrolRoute.removeAll(keepingCapacity:true)
                 fighter.atlantisEgress = nil
@@ -381,9 +387,15 @@ extension Dogfight {
     }
 
     func updateAtlantis(_ dt: Float, starts: [V3], wasActive: [Bool]) {
-        if let next = nextAtlantisEncounter, encountersCompleted>=next, atlantis == nil,
-           !returningFromAtlantis, activeCount>0, carriers.isEmpty, arrivingCount==0 {
-            startAtlantisSiege()
+        if let side = atlantisAttackingSide, atlantis == nil, !returningFromAtlantis,
+           carriers.isEmpty, arrivingCount==0, time>=nextArrivalTime {
+            if atlantisTopUpPending || sideCount(side)==0 {
+                atlantisTopUpPending = false
+                let reserves = atlantisReinforcements(for:side)
+                deploySquadron(reserves,side:side)
+                if !reserves.isEmpty { return }
+            }
+            if sideCount(side)>0 && sideCount(1-side)==0 { startAtlantisSiege(attackingSide:side) }
         }
         if let city = atlantis {
             if let destroyedAt = city.destroyedAt {
@@ -401,14 +413,16 @@ extension Dogfight {
                 }
             }
         }
-        guard returningFromAtlantis, atlantis == nil, arrivingCount==0,
+        guard returningFromAtlantis, let side = atlantisAttackingSide, atlantis == nil, arrivingCount==0,
               fighters.allSatisfy({!$0.active || simd_length_squared($0.position)<1200*1200}) else { return }
         let regroupUntil = atlantisRegroupUntil ?? (time+6)
         atlantisRegroupUntil = regroupUntil
         guard time>=regroupUntil else { return }
         returningFromAtlantis = false
         atlantisRegroupUntil = nil
-        for side in 0..<2 { refillVeteranSquadron(side:side) }
+        atlantisAttackingSide = nil
+        refillVeteranSquadron(side:side)
+        queueFactionReplacement(for:1-side)
     }
 
     private func updateAtlantisDestruction(_ city: Atlantis, age: Float, dt: Float) {

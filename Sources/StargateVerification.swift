@@ -77,7 +77,29 @@ func verifyStargate(renderDirectory: URL? = nil) {
     print("PASS: F-302s, Death Gliders and Wraith Darts launch in pairs from their respective carriers, which depart after deployment.")
     fflush(stdout)
 
-    let b = Dogfight(seed:7304,initialFactions:[.tauri,.wraith],initialArrivals:false,firstAtlantisEncounter:0)
+    func prepareSoloSiege(_ faction: Faction, seed: UInt64) -> Dogfight {
+        let b = Dogfight(seed:seed,initialFactions:[faction,.wraith],initialArrivals:false,firstAtlantisEncounter:0)
+        stargateCheck(b.atlantis == nil,"Atlantis arrived while two factions were still in play")
+        for f in b.fighters { f.cooldown = 10000 }
+        let veteran = b.fighters.first { $0.side==0 }!
+        let generation = veteran.generation
+        for f in b.fighters where f.side==1 { b.destroy(f) }
+        let casualties = b.fighters.filter { $0.side==0 }.suffix(2)
+        for f in casualties { b.destroy(f) }
+        b.update(dt:dt)
+        stargateCheck(b.atlantisAttackingSide==0 && b.atlantis == nil,"The lone faction did not reserve the siege")
+        for _ in 0..<1200 where b.atlantis == nil {
+            b.update(dt:dt)
+            stargateCheck(b.fighters.allSatisfy { $0.side==0 || (!$0.active && $0.state != .arriving) },
+                          "A rival faction arrived during siege preparation")
+        }
+        stargateCheck(b.atlantis != nil && b.topUpWaves==1 && b.sideCount(0)==6 &&
+                      casualties.allSatisfy(\.active) && veteran.generation==generation,
+                      "Atlantis arrived before the survivor top-up completed or replaced a veteran")
+        return b
+    }
+    let b = prepareSoloSiege(.tauri,seed:7304)
+    for f in b.fighters { f.cooldown = 0.2 }
     let city = b.atlantis!
     stargateCheck(simd_length(city.position)>2500,"Atlantis arrived inside the asteroid field")
     stargateCheck(simd_dot(city.position,unit(b.planetPosition))>1000,"Atlantis did not arrive on the planet-facing side")
@@ -140,9 +162,10 @@ func verifyStargate(renderDirectory: URL? = nil) {
             let shield = city.shieldPoints
             let encounters = b.encountersCompleted
             for f in b.fighters where f.side==0 && f.active { b.destroy(f) }
-            b.requestReplacement(for:0)
-            stargateCheck(b.pendingSides.contains(0) && city.shieldPoints==shield && b.atlantis === city,
-                          "Atlantis or its damage was lost when an attack wave was wiped out")
+            b.updateReinforcements(0)
+            stargateCheck(b.arrivingCount>0 && city.shieldPoints==shield && b.atlantis === city &&
+                          b.fighters.filter { $0.state == .arriving }.allSatisfy { $0.side==0 && $0.faction == .tauri },
+                          "A wiped-out siege wave changed faction or lost Atlantis's damage")
             stargateCheck(b.encountersCompleted==encounters,"Siege losses were credited as faction-versus-faction victories")
             replaced = true
         }
@@ -153,8 +176,9 @@ func verifyStargate(renderDirectory: URL? = nil) {
                 assaultStartedAt = b.time
                 stargateCheck(city.shieldPoints<=Atlantis.assaultThreshold && city.shieldPoints>0,
                               "Capital attack did not start during the low-shield window")
-                stargateCheck(b.sideFactions.contains(assault.ship.faction) && assault.ship.squadron.isEmpty,
-                              "An unrelated faction or extra fighter wave joined the siege")
+                stargateCheck(assault.ship.faction == .tauri && assault.ship.side==city.attackingSide &&
+                              !assault.ship.squadron.isEmpty && assault.ship.squadron.allSatisfy { b.fighters[$0].faction == .tauri },
+                              "The siege capital did not bring a top-up for the lone faction")
             }
             maxSwarm = max(maxSwarm,assault.drones.count)
             let bolts = b.lasers.filter { $0.targetsAtlantis && $0.atlantisDamage>1 }
@@ -253,11 +277,15 @@ func verifyStargate(renderDirectory: URL? = nil) {
     let ready = b.nextAtlantisEncounter!
     for f in b.fighters { f.cooldown = 10000 }
     for _ in 0..<1080 { b.update(dt:1.0/30) }
-    b.encountersCompleted = ready-1
-    b.update(dt:0)
+    b.encountersCompleted = ready-2
+    for f in b.fighters where f.side==1 && f.active { b.destroy(f) }
+    b.updateReinforcements(0)
     stargateCheck(b.atlantis == nil,"Atlantis returned after only nine subsequent encounters")
-    b.encountersCompleted = ready
-    b.update(dt:0)
+    for _ in 0..<1080 { b.update(dt:dt) }
+    b.encountersCompleted = ready-1
+    for f in b.fighters where f.side==1 && f.active { b.destroy(f) }
+    b.updateReinforcements(0)
+    for _ in 0..<1200 where b.atlantis == nil { b.update(dt:dt) }
     stargateCheck(b.atlantisSiegeActive,"Atlantis could not return after the cooldown")
     print("PASS: \(volleySizes.count) drone volleys with 30 launches per completed volley and a ten-second pause. Peak active drones: \(maxDrones).")
     print("PASS: city shield breached at \(Int(breach!))s, city destroyed at \(Int(destroyedTime!))s, survivors returned, and ten encounters elapsed before eligibility.")
@@ -265,13 +293,9 @@ func verifyStargate(renderDirectory: URL? = nil) {
     // In particular, two fleets that normally insert fighters directly still
     // have their own capital hulls for the siege, with their native jump styles.
     for faction: Faction in [.rebel,.earth,.colonial,.shadow] {
-        let battle = Dogfight(seed:7305,initialFactions:[faction,.wraith],initialArrivals:false,firstAtlantisEncounter:0)
+        let battle = prepareSoloSiege(faction,seed:7305)
         let city = battle.atlantis!
-        for fighter in battle.fighters {
-            fighter.cooldown = 1000
-            if fighter.side==1 { fighter.state = .destroyed; fighter.node.isHidden = true }
-        }
-        battle.pendingSides.insert(1)
+        for fighter in battle.fighters { fighter.cooldown = 1000 }
         city.hitShield(at:city.position+V3(0,Atlantis.shieldRadius,0),
                        damage:city.shieldPoints-Atlantis.assaultThreshold-1)
         battle.update(dt:dt)

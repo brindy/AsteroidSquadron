@@ -9,7 +9,7 @@ private func veteranCheck(_ condition: @autoclosure () -> Bool, _ message: Strin
 
 func verifyVeteransAndSkybox() {
     verifyAceLeadership()
-    let b = Dogfight(seed:1414,initialFactions:[.rebel,.empire],initialArrivals:false)
+    let b = Dogfight(seed:1414,initialFactions:[.rebel,.empire],initialArrivals:false,firstAtlantisEncounter:nil)
     b.automatic = false; b.rocks.removeAll()
     for f in b.fighters { f.cooldown = 10000 }
     let friends = b.fighters.filter{$0.side == 0}

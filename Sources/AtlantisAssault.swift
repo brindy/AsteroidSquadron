@@ -146,15 +146,16 @@ final class AtlantisAssault {
 extension Dogfight {
     func updateAtlantisAssault(_ city: Atlantis, dt: Float) {
         if city.assault == nil && city.shieldPoints<=Atlantis.assaultThreshold {
-            let activeSides = sideFactions.indices.filter { sideCount($0)>0 }
-            let sides = activeSides.isEmpty ? Array(sideFactions.indices) : activeSides
-            let side = sides[rng.index(sides.count)]
+            let side = city.attackingSide
             let radial = unit(V3(city.position.x,0,city.position.z))
             let lateral = unit(simd_cross(radial,V3(0,1,0)))
             let outward = unit(radial*0.62+lateral*0.78)
+            let reserves = atlantisReinforcements(for:side)
             let ship = Carrier(faction:sideFactions[side],side:side,origin:city.position+outward*1850,
-                               forward:-outward,start:time,squadron:[])
+                               forward:-outward,start:time,squadron:reserves,isSiegeShip:true)
             city.assault = AtlantisAssault(ship:ship,port:city.dronePort)
+            stageHangarLaunch(ship)
+            if !reserves.isEmpty { waveNumber += 1 }
             scene.rootNode.addChildNode(ship.node)
             scene.rootNode.addChildNode(ship.warp)
             if automatic { director.begin(.atlantisCapitalArrival,in:self) }
@@ -179,7 +180,8 @@ extension Dogfight {
             if time>=assault.nextVolley {
                 fireCapitalVolley(assault,at:city)
                 if assault.counterstrikeStart == nil {
-                    assault.counterstrikeStart = time+0.86
+                    let launchClearance = ship.squadron.isEmpty ? time : ship.start+ship.lastLaunchAge+0.55
+                    assault.counterstrikeStart = max(time+0.86,launchClearance)
                     if automatic { director.begin(.atlantisBombardment,in:self) }
                 }
                 assault.nextVolley = time+0.64
