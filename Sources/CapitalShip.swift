@@ -141,9 +141,10 @@ final class Carrier {
                     (V3(-51,-5,-7),V3(18,12,80)),
                     (V3(51,-5,-7),V3(18,12,80))]
         case .wraith:
-            return [(V3(0,3,0),V3(62,39,154)),
-                    (V3(-51,0,6),V3(33,22,130)),
-                    (V3(51,0,6),V3(33,22,130))]
+            return [(V3(0,1,0),V3(32,27,155)),
+                    (V3(-66,7,5),V3(43,32,141)),
+                    (V3(66,7,5),V3(43,32,141)),
+                    (V3(0,-1,111),V3(53,23,44))]
         default:
             return [(cameraCenter,cameraBounds)]
         }
@@ -199,7 +200,7 @@ final class Carrier {
         case .rebel: port = V3(sign*24,-16,-46)
         case .tauri: port = V3(sign*51,-6,-87)
         case .goauld: port = V3(sign*29,-18,-74)
-        case .wraith: port = V3(sign*32,-22,-93)
+        case .wraith: port = V3(sign*wraithHangarMouth.x,wraithHangarMouth.y,wraithHangarMouth.z-1)
         default: port = V3(sign*11,-16,15)
         }
         return station(age)+node.simdOrientation.act(port*scale)

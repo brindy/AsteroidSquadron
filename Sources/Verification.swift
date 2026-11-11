@@ -855,7 +855,7 @@ func renderReview(directory: URL) {
     let camera = SCNNode(); camera.camera = SCNCamera(); camera.camera!.zNear = 0.1; camera.camera!.zFar = 3000
     scene.rootNode.addChildNode(camera)
     renderer.scene = scene; renderer.pointOfView = camera
-    for (name,ship) in [("xwing",xWing()),("tie",tieFighter()),("viper",colonialViper()),("raider",cylonRaider())] {
+    for (name,ship) in [("xwing",xWing()),("tie",tieFighter()),("viper",colonialViper()),("raider",cylonRaider()),("wraith-dart",wraithDart())] {
         scene.rootNode.addChildNode(ship)
         for (index,position) in [V3(12,7,-16),V3(0,1,-20),V3(-13,5,15)].enumerated() {
             camera.simdPosition = position; camera.look(at:SCNVector3(0,0,-1),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
@@ -863,7 +863,7 @@ func renderReview(directory: URL) {
         }
         ship.removeFromParentNode()
     }
-    for (name,ship) in [("galactica",battlestarGalactica()),("basestar",cylonBasestar())] {
+    for (name,ship) in [("galactica",battlestarGalactica()),("basestar",cylonBasestar()),("wraith-hive",wraithHive())] {
         scene.rootNode.addChildNode(ship)
         for (index,position) in [V3(260,140,-300),V3(0,350,-110),V3(-250,90,280)].enumerated() {
             camera.simdPosition = position

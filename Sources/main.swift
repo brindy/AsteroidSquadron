@@ -397,6 +397,7 @@ final class Dogfight {
     var encountersCompleted = 0
     var atlantis: Atlantis?
     var nextAtlantisEncounter: Int?
+    var atlantisRandom: Random
     var atlantisAttackingSide: Int?
     var atlantisTopUpPending = false
     var returningFromAtlantis = false
@@ -467,9 +468,13 @@ final class Dogfight {
     var arrivingCount: Int { fighters.filter { $0.state == .arriving }.count }
     func sideCount(_ side: Int) -> Int { fighters.filter { $0.side == side && $0.active }.count }
 
-    init(seed: UInt64 = UInt64.random(in:1...UInt64.max), initialFactions: [Faction]? = nil, initialArrivals: Bool = true, firstAtlantisEncounter: Int? = 3) {
+    init(seed: UInt64 = UInt64.random(in:1...UInt64.max), initialFactions: [Faction]? = nil, initialArrivals: Bool = true,
+         firstAtlantisEncounter: ClosedRange<Int>? = Atlantis.firstEncounterWindow) {
         self.seed = seed
-        nextAtlantisEncounter = firstAtlantisEncounter
+        // Siege timing varies by sector without consuming the combat random stream.
+        var siegeRandom = Random(state:seed ^ 0x4154_4C41_4E54_4953)
+        nextAtlantisEncounter = firstAtlantisEncounter.map { $0.lowerBound + siegeRandom.index($0.count) }
+        atlantisRandom = siegeRandom
         rng = Random(state:seed)
         director = CinematicDirector(seed:seed)
         arenaRotation = simd_quatf(angle:rng.range(0,tau),axis:V3(0,1,0)) * simd_quatf(angle:rng.range(-0.35,0.35),axis:V3(0,0,1))
@@ -852,6 +857,9 @@ final class FlightView: SCNView {
 }
 
 final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private static let pauseWhenUnfocusedKey = "PauseWhenUnfocused"
+    private var manuallyPaused = false
+    private var pauseWhenUnfocused: Bool { UserDefaults.standard.bool(forKey:Self.pauseWhenUnfocusedKey) }
     var window: NSWindow!
     var view: FlightView!
     var overlay: Overlay!
@@ -876,6 +884,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var awakeItem: NSMenuItem!
     var autoItem: NSMenuItem!
     var pauseItem: NSMenuItem!
+    var pauseWhenUnfocusedItem: NSMenuItem!
     var hudHidden = false
     var highQuality = false
     var activityToken: NSObjectProtocol?
@@ -883,11 +892,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        UserDefaults.standard.register(defaults:[Self.pauseWhenUnfocusedKey:true])
         // Use the compiled bundle icon everywhere, including the Dock. A raw
         // NSImage override bypasses native icon rendering and hides bundle bugs.
         buildMenu()
         battle = Dogfight(seed:requestedSeed(),initialFactions:requestedFactions(),
-                          firstAtlantisEncounter:CommandLine.arguments.contains("--atlantis") ? 0 : 3)
+                          firstAtlantisEncounter:CommandLine.arguments.contains("--atlantis") ? 1...1 : Atlantis.firstEncounterWindow)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1440,height:900)
         let width = min(1440,screen.width-80), height = min(900,screen.height-80)
         window = NSWindow(contentRect:NSRect(x:0,y:0,width:width,height:height),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
@@ -942,6 +952,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         startTimer()
         window.makeKeyAndOrderFront(nil); window.makeFirstResponder(view)
         NSApp.activate(ignoringOtherApps:true)
+        updatePauseState()
         if CommandLine.arguments.contains("--fullscreen") { window.toggleFullScreen(nil) }
         if CommandLine.arguments.contains("--smoke-test") {
             DispatchQueue.main.asyncAfter(deadline:.now()+3) { [weak self] in self?.smokeTest() }
@@ -963,6 +974,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuView.addItem(withTitle:"Next Camera",action:#selector(nextCamera),keyEquivalent:"n")
         autoItem = menuView.addItem(withTitle:"Automatic Camera Cuts",action:#selector(toggleAutomatic),keyEquivalent:"a")
         pauseItem = menuView.addItem(withTitle:"Pause Flight",action:#selector(togglePause),keyEquivalent:"p")
+        pauseWhenUnfocusedItem = menuView.addItem(withTitle:"Pause When Unfocused",action:#selector(togglePauseWhenUnfocused),keyEquivalent:"")
+        pauseWhenUnfocusedItem.state = pauseWhenUnfocused ? .on : .off
         menuView.addItem(withTitle:"Show / Hide Overlay",action:#selector(toggleHUD),keyEquivalent:"u")
         menuView.addItem(withTitle:"Toggle Full Screen",action:#selector(fullscreen),keyEquivalent:"f")
         menuView.addItem(withTitle:"Fill / Restore Window",action:#selector(fillWindow),keyEquivalent:"")
@@ -1036,9 +1049,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         battle.viewportAspect = Float(view.bounds.width/max(1,view.bounds.height))
         let now = ProcessInfo.processInfo.systemUptime
         let dt = Float(min(0.08,now-lastTime)); lastTime = now
-        SCNTransaction.begin(); SCNTransaction.animationDuration = 0
-        battle.update(dt:dt)
-        SCNTransaction.commit()
+        if !battle.paused {
+            SCNTransaction.begin(); SCNTransaction.animationDuration = 0
+            battle.update(dt:dt)
+            SCNTransaction.commit()
+        }
         if now-lastHUD > 1 {
             lastHUD = now
             let duration = Int(now-startTime)
@@ -1046,7 +1061,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             aceStatus.stringValue = battle.aceHUDStatus
             aceHistory.stringValue = String(format:"ACES EMERGED  %02d   ·   LONGEST SURVIVAL  %d %@",battle.acesEmerged,battle.longestEncounterStreak,battle.longestEncounterStreak == 1 ? "ENCOUNTER" : "ENCOUNTERS")
             sector.stringValue = String(format:"PROCEDURAL ARENA  /  SECTOR %08llX",battle.seed & 0xFFFFFFFF)+"  /  "+(battle.planet?.biome.title ?? "")
-            if let city = battle.atlantis, city.intact {
+            if battle.paused {
+                eventStatus.stringValue = manuallyPaused ? "FLIGHT PAUSED" : "FLIGHT PAUSED   /   WINDOW UNFOCUSED"
+                eventStatus.textColor = orange
+            } else if let city = battle.atlantis, city.intact {
                 let shield = Int(ceil(100*Double(city.shieldPoints)/Double(Atlantis.shieldCapacity)))
                 let hull = Int(ceil(100*Double(city.hullPoints)/Double(Atlantis.hullCapacity)))
                 eventStatus.stringValue = "ATLANTIS   /   SHIELD \(shield)%   /   HULL \(hull)%"
@@ -1125,10 +1143,28 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showControls()
     }
     @objc func togglePause() {
-        battle.paused.toggle(); pauseButton.title = battle.paused ? "▶" : "Ⅱ"
-        pauseItem.title = battle.paused ? "Resume Flight" : "Pause Flight"
-        view.isPlaying = !battle.paused; view.rendersContinuously = !battle.paused
+        manuallyPaused.toggle()
+        updatePauseState()
         showControls()
+    }
+    @objc func togglePauseWhenUnfocused() {
+        let enabled = !pauseWhenUnfocused
+        UserDefaults.standard.set(enabled,forKey:Self.pauseWhenUnfocusedKey)
+        pauseWhenUnfocusedItem.state = enabled ? .on : .off
+        updatePauseState()
+        showControls()
+    }
+    private func updatePauseState() {
+        guard let window, let battle, let view, let pauseButton else { return }
+        let hasFocus = NSApp.isActive && window.isKeyWindow
+        let paused = manuallyPaused || (pauseWhenUnfocused && !hasFocus)
+        if battle.paused != paused { lastTime = ProcessInfo.processInfo.systemUptime }
+        battle.paused = paused
+        pauseButton.title = manuallyPaused ? "▶" : "Ⅱ"
+        pauseItem.title = manuallyPaused ? "Resume Flight" : "Pause Flight"
+        view.isPlaying = !paused
+        view.rendersContinuously = !paused
+        lastHUD = 0
     }
     @objc func toggleAwake() { if awake.enabled { awake.stop() } else { _ = awake.start() }; updateStatus(); showControls() }
     @objc func toggleHUD() { hudHidden.toggle(); overlay.isHidden = hudHidden; showControls() }
@@ -1140,11 +1176,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         startTimer(); showControls()
     }
     @objc func newArena() {
-        let wasPaused = battle.paused, wasAutomatic = battle.automatic
+        let wasAutomatic = battle.automatic
         battle = Dogfight()
-        battle.paused = wasPaused; battle.automatic = wasAutomatic
+        battle.automatic = wasAutomatic
         battle.cameraChanged = { [weak self] in self?.updateCameraHUD() }
         view.scene = battle.scene; view.pointOfView = battle.camera
+        updatePauseState()
         aceStatus.stringValue = battle.aceHUDStatus
         updateCameraHUD(); showControls()
     }
@@ -1154,7 +1191,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. A pilot needs three survived encounters, six enemy kills, and a kill count above the previous Ace record. The current Ace carries a gold star. The title can stay vacant until the record is beaten. Without opponents, pilots patrol through and around the belt. Both squadrons attack Atlantis when it appears beyond the field. After its destruction, surviving fighters return to the belt. The HUD records distinct Ace pilots and the longest completed-encounter survival streak in this arena, even after pilots are lost. R resets these arena records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners."
+        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nFlight → Pause When Unfocused   Pause automatically when the window loses focus\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. A pilot needs three survived encounters, six enemy kills, and a kill count above the previous Ace record. The current Ace carries a gold star. The title can stay vacant until the record is beaten. Without opponents, pilots patrol through and around the belt. Both squadrons attack Atlantis when it appears beyond the field. After its destruction, surviving fighters return to the belt. The HUD records distinct Ace pilots and the longest completed-encounter survival streak in this arena, even after pilots are lost. R resets these arena records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }
@@ -1164,7 +1201,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let pointerMonitor { NSEvent.removeMonitor(pointerMonitor) }
         if let token = activityToken { ProcessInfo.processInfo.endActivity(token) }
     }
-    func windowDidBecomeKey(_ notification: Notification) { window.makeFirstResponder(view) }
+    func applicationDidBecomeActive(_ notification: Notification) { updatePauseState() }
+    func applicationDidResignActive(_ notification: Notification) { updatePauseState() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        window.makeFirstResponder(view)
+        updatePauseState()
+    }
+    func windowDidResignKey(_ notification: Notification) { updatePauseState() }
     func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
         window.screen?.visibleFrame ?? newFrame
     }
@@ -1187,7 +1230,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard CommandLine.arguments.contains("--smoke-test"), let battle, let window else { return }
         let path = CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png"
         let output = URL(fileURLWithPath:path)
-        let stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"pursuitBreaks":battle.pursuitBreaks,"aces":battle.fighters.filter(\.isAce).filter(\.active).count,"acesEmerged":battle.acesEmerged,"longestEncounterStreak":battle.longestEncounterStreak,"aceKills":battle.fighters.first(where:{$0.isAce})?.enemyKills ?? 0,"encounters":battle.encountersCompleted,"topUpWaves":battle.topUpWaves,"starfuryPivots":battle.starfuryPivots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
+        var stats: [String:Any] = ["fighters":battle.activeCount,"asteroids":battle.rocks.count,"clouds":battle.clouds.count,"seed":String(battle.seed),"waves":battle.waveNumber,"reinforcements":battle.reinforcements,"destroyed":battle.destroyed,"keepAwake":awake.enabled,"camera":battle.cameraIndex,"elapsed":battle.time,"shots":battle.shots,"pursuitBreaks":battle.pursuitBreaks,"aces":battle.fighters.filter(\.isAce).filter(\.active).count,"acesEmerged":battle.acesEmerged,"longestEncounterStreak":battle.longestEncounterStreak,"aceKills":battle.fighters.first(where:{$0.isAce})?.enemyKills ?? 0,"encounters":battle.encountersCompleted,"topUpWaves":battle.topUpWaves,"starfuryPivots":battle.starfuryPivots,"windowFrame":NSStringFromRect(window.frame),"visibleScreen":NSStringFromRect(window.screen?.visibleFrame ?? .zero),"isFullScreen":window.styleMask.contains(.fullScreen),"isZoomed":window.isZoomed,"pointerEvent":view?.lastPointerEvent ?? "none","dragEvents":view?.dragEventCount ?? 0,"formationCuts":battle.director.formationCuts,"carrierCuts":battle.director.carrierCuts,"carrierVisits":battle.carrierVisits,"carrierDepartures":battle.carrierDepartures,"factions":battle.sideFactions.map(\.rawValue),"encounteredFactions":battle.encounteredFactions.map(\.rawValue).sorted(),"replacements":battle.replacementCount,"blinkArrivals":battle.blinkArrivals,"blinkDepartures":battle.blinkDepartures,"spinOuts":battle.spinOuts,"shipCollisions":battle.shipCollisions,"shipCollisionLosses":battle.shipCollisionLosses,"recoveries":battle.recoveries,"asteroidLosses":battle.asteroidLosses]
+        stats["paused"] = battle.paused
+        stats["pauseWhenUnfocused"] = pauseWhenUnfocused
+        stats["windowFocused"] = NSApp.isActive && window.isKeyWindow
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }

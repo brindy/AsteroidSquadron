@@ -77,8 +77,16 @@ func verifyStargate(renderDirectory: URL? = nil) {
     print("PASS: F-302s, Death Gliders and Wraith Darts launch in pairs from their respective carriers, which depart after deployment.")
     fflush(stdout)
 
+    let openingEncounters = [UInt64(7302),7303,7304,7305].compactMap { seed in
+        Dogfight(seed:seed,initialFactions:[.tauri,.wraith],initialArrivals:false).nextAtlantisEncounter
+    }
+    stargateCheck(openingEncounters.count==4 && Set(openingEncounters).count>1 &&
+                  openingEncounters.allSatisfy(Atlantis.firstEncounterWindow.contains),
+                  "Normal Atlantis arrivals did not vary within the opening window")
+
     func prepareSoloSiege(_ faction: Faction, seed: UInt64) -> Dogfight {
-        let b = Dogfight(seed:seed,initialFactions:[faction,.wraith],initialArrivals:false,firstAtlantisEncounter:0)
+        let opponent: Faction = faction == .wraith ? .tauri : .wraith
+        let b = Dogfight(seed:seed,initialFactions:[faction,opponent],initialArrivals:false,firstAtlantisEncounter:1...1)
         stargateCheck(b.atlantis == nil,"Atlantis arrived while two factions were still in play")
         for f in b.fighters { f.cooldown = 10000 }
         let veteran = b.fighters.first { $0.side==0 }!
@@ -241,7 +249,8 @@ func verifyStargate(renderDirectory: URL? = nil) {
         }
         if !city.intact && destroyedTime == nil {
             destroyedTime = b.time
-            stargateCheck(b.nextAtlantisEncounter==b.encountersCompleted+10,"Atlantis cooldown is shorter than ten encounters")
+            stargateCheck(b.nextAtlantisEncounter.map { Atlantis.returnEncounterWindow.contains($0-b.encountersCompleted) } == true,
+                          "Atlantis return was scheduled outside its cooldown window")
         }
         if regroupDeadline == nil { regroupDeadline = b.atlantisRegroupUntil }
         if destroyedTime != nil && !b.returningFromAtlantis { break }
@@ -280,7 +289,8 @@ func verifyStargate(renderDirectory: URL? = nil) {
     b.encountersCompleted = ready-2
     for f in b.fighters where f.side==1 && f.active { b.destroy(f) }
     b.updateReinforcements(0)
-    stargateCheck(b.atlantis == nil,"Atlantis returned after only nine subsequent encounters")
+    stargateCheck(b.atlantisAttackingSide == nil && b.encountersCompleted==ready-1,
+                  "Atlantis became eligible before its scheduled return")
     for _ in 0..<1080 { b.update(dt:dt) }
     b.encountersCompleted = ready-1
     for f in b.fighters where f.side==1 && f.active { b.destroy(f) }
@@ -288,11 +298,11 @@ func verifyStargate(renderDirectory: URL? = nil) {
     for _ in 0..<1200 where b.atlantis == nil { b.update(dt:dt) }
     stargateCheck(b.atlantisSiegeActive,"Atlantis could not return after the cooldown")
     print("PASS: \(volleySizes.count) drone volleys with 30 launches per completed volley and a ten-second pause. Peak active drones: \(maxDrones).")
-    print("PASS: city shield breached at \(Int(breach!))s, city destroyed at \(Int(destroyedTime!))s, survivors returned, and ten encounters elapsed before eligibility.")
+    print("PASS: city shield breached at \(Int(breach!))s, city destroyed at \(Int(destroyedTime!))s, and survivors regrouped. Atlantis opens on a seeded victory and returns only after its longer cooldown.")
 
     // In particular, two fleets that normally insert fighters directly still
     // have their own capital hulls for the siege, with their native jump styles.
-    for faction: Faction in [.rebel,.earth,.colonial,.shadow] {
+    for faction: Faction in [.rebel,.earth,.colonial,.shadow,.wraith] {
         let battle = prepareSoloSiege(faction,seed:7305)
         let city = battle.atlantis!
         for fighter in battle.fighters { fighter.cooldown = 1000 }
@@ -306,10 +316,15 @@ func verifyStargate(renderDirectory: URL? = nil) {
         stargateCheck(assault.ship.faction==faction && assault.ship.framingPoints.count>8,
                       "The surviving faction did not deploy a real capital hull")
         var sawWindow = false
+        var renderedHive = false
         for _ in 0..<960 {
             battle.update(dt:dt)
             if let window = assault.ship.jumpWindow, !window.node.isHidden && assault.ship.node.isHidden {
                 sawWindow = true
+            }
+            if faction == .wraith && !renderedHive && assault.ship.squadron.contains(where:{battle.fighters[$0].active}) {
+                save("wraith-siege-top-up",battle:battle)
+                renderedHive = true
             }
             if assault.finished { break }
         }
@@ -318,6 +333,6 @@ func verifyStargate(renderDirectory: URL? = nil) {
         stargateCheck(!faction.usesJumpWindow || sawWindow,"\(faction) skipped the opening jump window")
         stargateCheck(!faction.usesBlinkFTL || assault.ship.blinkEntered,"The assault skipped blink FTL")
     }
-    print("PASS: Rebel and Earth Alliance siege hulls, jump-window and blink arrivals, and capital-only shield hits.")
+    print("PASS: Rebel, Earth Alliance and Wraith siege hulls, jump-window and blink arrivals, and capital-only shield hits.")
     fflush(stdout)
 }

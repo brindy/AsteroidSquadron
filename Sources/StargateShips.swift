@@ -58,24 +58,6 @@ func deathGlider() -> SCNNode {
     return ship
 }
 
-func wraithDart() -> SCNNode {
-    let ship = SCNNode()
-    let shell = material(color(0.27,0.35,0.30),metal:0.24)
-    let ridge = material(color(0.45,0.44,0.29),metal:0.38)
-    let canopy = material(color(0.12,0.25,0.21),metal:0.75)
-    let power = material(color(0.43,1,0.69),emission:color(0.48,2.4,1.2))
-    ship.addChildNode(armoredLoft([(-7.6,0.06,0.09,-0.09),(-3.1,0.38,0.28,-0.08),(-0.7,1.00,0.57,0),(2.7,1.17,0.60,0),(4.6,0.32,0.26,0.12)],mat:shell))
-    ship.addChildNode(armoredLoft([(-2.9,0.18,0.08,0.27),(-0.85,0.58,0.32,0.48),(1.45,0.53,0.24,0.43),(2.6,0.28,0.12,0.34)],mat:canopy))
-    for side: Float in [-1,1] {
-        ship.addChildNode(armorPlate([V3(side*0.65,0.17,-1.75),V3(side*4.9,-0.35,3.92),V3(side*3.4,-0.25,4.5),V3(side*0.8,0.07,3.14)],depth:0.26,material:shell))
-        ship.addChildNode(segment(V3(side*0.7,0.28,-1.4),V3(side*4.7,-0.26,3.92),radius:0.13,mat:ridge))
-        ship.addChildNode(cylinder(0.30,0.25,power,V3(side*0.64,0.02,3.91)))
-        ship.addChildNode(cylinder(0.11,1.55,ridge,V3(side*0.50,-0.15,-2.22)))
-        addMuzzle(to:ship,at:V3(side*0.50,-0.15,-3.03),name:side<0 ? "left" : "right")
-    }
-    return ship
-}
-
 func daedalus() -> SCNNode {
     let ship = SCNNode()
     let armor = material(color(0.39,0.45,0.50),metal:0.45)
@@ -146,41 +128,6 @@ func goauldMothership() -> SCNNode {
     for x: Float in [-29,29] {
         ship.addChildNode(box(V3(22,8,27),dark,V3(x,-17,-59),chamfer:1.5))
         ship.addChildNode(box(V3(18,0.8,0.8),amber,V3(x,-21.1,-73)))
-    }
-    return ship
-}
-
-func wraithHive() -> SCNNode {
-    let ship = SCNNode()
-    let carapace = material(color(0.27,0.33,0.32),metal:0.33)
-    carapace.shaderModifiers = [.surface:"""
-        float3 p = (scn_node.inverseModelViewTransform*float4(_surface.position,1)).xyz;
-        float grain = sin(p.z*0.28 + sin(p.x*0.35)*1.5)*sin(p.y*0.35 + p.x*0.16);
-        _surface.diffuse.rgb *= 0.79 + grain*0.14;
-        """]
-    let ridges = material(color(0.43,0.43,0.33),metal:0.35)
-    let cavities = material(color(0.039,0.074,0.068),metal:0.2)
-    let green = material(color(0.40,0.95,0.67),emission:color(0.33,1.45,0.78))
-    ship.addChildNode(armoredLoft([(-154,4,4,-3),(-123,23,12,-3),(-62,47,20,2),(12,59,29,4),(79,54,25,3),(128,35,15,-1),(150,13,7,-2)],mat:carapace))
-    ship.addChildNode(armoredLoft([(-93,5,3,14),(-49,11,6,24),(38,14,8,34),(100,8,6,25),(137,3,2,10)],mat:ridges))
-    for side: Float in [-1,1] {
-        let lobe = armoredLoft([(-110,4,4,-2),(-66,17,12,1),(14,26,17,1),(79,21,13,-2),(128,3,4,-6)],mat:carapace)
-        lobe.simdPosition.x = side*49
-        lobe.simdEulerAngles.y = side*0.24
-        ship.addChildNode(lobe)
-        for i in 0..<15 {
-            let z = -88+Float(i)*14
-            let width = 42+22*sin(Float(i)*Float.pi/15)
-            ship.addChildNode(segment(V3(side*12,25,z+11),V3(side*width,9,z-7),radius:1.55,mat:ridges))
-            ship.addChildNode(box(V3(3.1,1.45,3.1),green,V3(side*(width-5),10,z+1)))
-            if i>2 && i<13 {
-                ship.addChildNode(segment(V3(side*11,-24,z+5),V3(side*43,-16,z-5),radius:1.1,mat:ridges))
-                ship.addChildNode(box(V3(2.5,0.65,5),green,V3(side*15,-24.5,z)))
-            }
-        }
-        ship.addChildNode(box(V3(19,10,32),cavities,V3(side*32,-21,-75),chamfer:2.5))
-        ship.addChildNode(box(V3(16,1.2,0.8),green,V3(side*32,-25,-91.5)))
-        ship.addChildNode(cylinder(8,3,green,V3(side*22,-5,142)))
     }
     return ship
 }

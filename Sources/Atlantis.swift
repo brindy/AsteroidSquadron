@@ -2,6 +2,8 @@ import SceneKit
 import simd
 
 final class Atlantis {
+    static let firstEncounterWindow = 12...24
+    static let returnEncounterWindow = 24...40
     static let shieldCapacity = 480
     static let hullCapacity = 340
     static let shieldRadius: Float = 625
@@ -359,7 +361,8 @@ extension Dogfight {
             city.destroyedAt = time
             returningFromAtlantis = true
             creditEncounter(survivingSides:[city.attackingSide],replenish:false)
-            if nextAtlantisEncounter != nil { nextAtlantisEncounter = encountersCompleted+10 }
+            let window = Atlantis.returnEncounterWindow
+            nextAtlantisEncounter = encountersCompleted + window.lowerBound + atlantisRandom.index(window.count)
             for drone in city.drones { drone.node.removeFromParentNode() }
             city.drones.removeAll()
             city.droneVolley = nil
