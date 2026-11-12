@@ -32,11 +32,10 @@ float planetFBM(float3 p) {
     }
     return result;
 }
-float planetClouds(float3 p,float seed,float time) {
+float planetClouds(float3 p,float3 offset,float time) {
     // Differential latitude winds shear the domain into curling weather bands.
     float angle = sin(p.y*6.0)*0.34+time*0.0015;
     p.xz = float2(p.x*cos(angle)-p.z*sin(angle),p.x*sin(angle)+p.z*cos(angle));
-    float3 offset = float3(seed,seed*0.37,seed*0.71);
     float3 warp = float3(planetNoise(p*3.8+offset),planetNoise(p*3.8+offset+17.2),planetNoise(p*3.8+offset-6.4));
     float weather = planetFBM(p*6.5+offset+warp*1.8);
     float wisps = planetNoise(p*70.0+offset)*0.045;
@@ -49,7 +48,10 @@ float planetCloudAmount(float biome) {
 
 private let surfaceFragment = """
 #pragma arguments
-float planetSeed;
+float3 terrainOffset;
+float3 weatherOffset;
+float continentScale;
+float continentWarp;
 float seaLevel;
 float planetTime;
 float planetBiome;
@@ -62,9 +64,9 @@ float3 p = normalize(point);
 float3 eye = (scn_node.inverseModelViewTransform*float4(0,0,0,1)).xyz;
 float3 view = normalize(eye-point);
 float3 sun = normalize((scn_node.inverseModelTransform*float4(planetSun,0)).xyz);
-float3 offset = float3(planetSeed,planetSeed*0.37,planetSeed*0.71);
+float3 offset = terrainOffset;
 float3 warp = float3(planetNoise(p*2.7+offset),planetNoise(p*2.7+offset+9.3),planetNoise(p*2.7+offset-7.2))-0.5;
-float continent = planetFBM(p*2.1+offset+warp*0.95);
+float continent = planetFBM(p*continentScale+offset+warp*continentWarp);
 float elevation = max(0.0,continent-seaLevel);
 float land = smoothstep(seaLevel-0.004,seaLevel+0.008,continent);
 float detail = planetFBM(p*23.0+offset);
@@ -75,7 +77,7 @@ float moisture = planetFBM(p*4.3+offset+31.4);
 float3 grass = float3(0.27,0.31,0.12), forest = float3(0.075,0.17,0.065), sand = float3(0.57,0.42,0.24);
 float3 rock = float3(0.34,0.32,0.29), snow = float3(0.83,0.86,0.85);
 float3 deep = float3(0.008,0.033,0.095), shallow = float3(0.013,0.12,0.19), shore = float3(0.035,0.29,0.30);
-float wetness = 1.0, polarCoverage = 1.0;
+float wetness = 1.0, polarCoverage = 1.0, polarEdge = 0.78;
 if (planetBiome>0.5 && planetBiome<1.5) {
     // Low basins are dune sand; the former green highlands become white salt/chalk.
     grass = float3(0.84,0.82,0.72); forest = float3(0.94,0.92,0.84); sand = float3(0.94,0.86,0.66);
@@ -86,7 +88,7 @@ if (planetBiome>0.5 && planetBiome<1.5) {
     grass = float3(0.76,0.84,0.86); forest = float3(0.88,0.91,0.92); sand = float3(0.61,0.73,0.77);
     rock = float3(0.38,0.48,0.55); snow = float3(0.94,0.96,0.97);
     deep = float3(0.055,0.15,0.24); shallow = float3(0.29,0.52,0.60); shore = float3(0.64,0.80,0.84);
-    wetness = 0.12;
+    wetness = 0.12; polarEdge = 0.63;
 } else if (planetBiome>2.5) {
     grass = float3(0.58,0.28,0.13); forest = float3(0.71,0.42,0.22); sand = float3(0.77,0.51,0.28);
     rock = float3(0.25,0.18,0.15); snow = float3(0.80,0.71,0.58);
@@ -98,7 +100,7 @@ float desert = smoothstep(0.04,0.2,latitude)*(1.0-smoothstep(0.43,0.62,latitude)
 landColor = mix(landColor,sand,desert*0.9);
 landColor = mix(landColor,rock,mountain);
 landColor *= 0.82+detail*0.4;
-float ice = smoothstep(0.78,0.91,latitude+elevation*0.65+(detail-0.5)*0.1)*polarCoverage;
+float ice = smoothstep(polarEdge,polarEdge+0.13,latitude+elevation*0.65+(detail-0.5)*0.1)*polarCoverage;
 float alpine = smoothstep(0.18,0.28,elevation+latitude*0.06)*mountain;
 landColor = mix(landColor,snow,alpine);
 float shelf = smoothstep(seaLevel-0.12,seaLevel,continent);
@@ -114,7 +116,7 @@ float3 gradient = (rx*dfdx(relief)+ry*dfdy(relief))/(abs(determinant)>0.0000001 
 gradient *= min(1.0,4.0/max(0.001,length(gradient)));
 float3 normal = normalize(p-gradient*0.045*land);
 float day = max(0.0,dot(normal,sun));
-float clouds = planetClouds(normalize(p+sun*0.008),planetSeed,planetTime)*planetCloudAmount(planetBiome);
+float clouds = planetClouds(normalize(p+sun*0.008),weatherOffset,planetTime)*planetCloudAmount(planetBiome);
 float3 lighting = float3(0.012,0.019,0.032)+float3(1.0,0.96,0.87)*pow(day,0.85)*1.23;
 float3 result = albedo*lighting*(1.0-clouds*0.22);
 float glint = pow(max(0.0,dot(normal,normalize(sun+view))),180.0)*day*(1.0-land)*(1.0-ice)*wetness;
@@ -124,7 +126,7 @@ _output.color = float4(result,1);
 
 private let cloudFragment = """
 #pragma arguments
-float planetSeed;
+float3 weatherOffset;
 float planetTime;
 float planetBiome;
 float3 planetSun;
@@ -133,10 +135,10 @@ float3 planetSun;
 #pragma transparent
 #pragma body
 float3 p = normalize((scn_node.inverseModelViewTransform*float4(_surface.position,1)).xyz);
-float density = planetClouds(p,planetSeed,planetTime)*planetCloudAmount(planetBiome);
+float density = planetClouds(p,weatherOffset,planetTime)*planetCloudAmount(planetBiome);
 float3 sun = normalize((scn_node.inverseModelTransform*float4(planetSun,0)).xyz);
 float day = max(0.0,dot(p,sun));
-float edge = planetClouds(normalize(p+sun*0.018),planetSeed,planetTime);
+float edge = planetClouds(normalize(p+sun*0.018),weatherOffset,planetTime);
 float lighting = (0.7+0.3*clamp(density-edge+0.5,0.0,1.0))*pow(day,0.72);
 float3 tint = float3(0.025,0.035,0.055)+float3(1.0,0.98,0.94)*lighting*1.18;
 _output.color = float4(tint*density*0.92,density*0.92);
@@ -187,19 +189,18 @@ final class ProceduralPlanet {
     let surface: SCNNode
     let clouds: SCNNode
     let atmosphere: SCNNode
-    let seed: UInt64
-    let noiseSeed: Float
-    let seaLevel: Float
     private(set) var biome: PlanetBiome
     var sunDirection: V3
     private let orientation: simd_quatf
+    private var planetRandom: Random
 
     init(seed: UInt64, radius: Float, sun: V3, biome requestedBiome: PlanetBiome? = nil) {
-        self.seed = seed; sunDirection = unit(sun)
+        sunDirection = unit(sun)
         var random = Random(state:seed ^ 0x50_AA_7E)
-        noiseSeed = random.range(3,97); seaLevel = random.range(0.46,0.53)
         orientation = simd_quatf(angle:random.range(0,tau),axis:V3(0,1,0))*simd_quatf(angle:random.range(0.18,0.47),axis:V3(0,0,1))
-        biome = requestedBiome ?? PlanetBiome.allCases[random.index(PlanetBiome.allCases.count)]
+        let initialBiome = PlanetBiome.allCases[random.index(PlanetBiome.allCases.count)]
+        biome = requestedBiome ?? initialBiome
+        planetRandom = random
         func layer(_ radius: CGFloat, _ fragment: String, name: String, transparent: Bool) -> SCNNode {
             let material = SCNMaterial(); material.lightingModel = .constant
             material.diffuse.contents = NSColor.white
@@ -217,19 +218,40 @@ final class ProceduralPlanet {
         clouds.renderingOrder = 5; atmosphere.renderingOrder = 10
         node.name = "procedural.planet"; node.simdScale = V3(repeating:radius)
         for child in [surface,clouds,atmosphere] { node.addChildNode(child) }
-        for child in [surface,clouds] {
-            let material = child.geometry!.firstMaterial!
-            material.setValue(noiseSeed,forKey:"planetSeed")
-            material.setValue(Float(0),forKey:"planetTime")
-        }
-        surface.geometry!.firstMaterial!.setValue(seaLevel,forKey:"seaLevel")
-        setBiome(biome)
+        generateWorld()
         update(time:0)
     }
 
-    func setBiome(_ value: PlanetBiome) {
-        biome = value
-        for child in [surface,clouds,atmosphere] { child.geometry!.firstMaterial!.setValue(Float(value.rawValue),forKey:"planetBiome") }
+    func nextBiome() {
+        let biomes = PlanetBiome.allCases
+        biome = biomes[(biome.rawValue+1)%biomes.count]
+        generateWorld()
+    }
+
+    private func generateWorld() {
+        let scale: ClosedRange<Float>, warp: ClosedRange<Float>, seaLevel: ClosedRange<Float>
+        switch biome {
+        case .temperate: // Supercontinents through to archipelagos.
+            (scale,warp,seaLevel) = (1.5...3.6,0.75...1.5,0.46...0.55)
+        case .saltDesert: // Broad sand basins and salt uplands.
+            (scale,warp,seaLevel) = (1.1...2.1,0.6...1.15,0.47...0.53)
+        case .ice: // Smaller plates broken up by winding channels.
+            (scale,warp,seaLevel) = (2.5...3.8,1.35...2.1,0.48...0.55)
+        case .rust: // Irregular ridges and broken-up highlands.
+            (scale,warp,seaLevel) = (1.9...3.0,1.8...2.5,0.43...0.5)
+        }
+        let terrain = surface.geometry!.firstMaterial!
+        terrain.setValue(SCNVector3(planetRandom.vector(64)),forKey:"terrainOffset")
+        terrain.setValue(planetRandom.range(scale.lowerBound,scale.upperBound),forKey:"continentScale")
+        terrain.setValue(planetRandom.range(warp.lowerBound,warp.upperBound),forKey:"continentWarp")
+        terrain.setValue(planetRandom.range(seaLevel.lowerBound,seaLevel.upperBound),forKey:"seaLevel")
+        let weatherOffset = SCNVector3(planetRandom.vector(64))
+        for child in [surface,clouds] {
+            child.geometry!.firstMaterial!.setValue(weatherOffset,forKey:"weatherOffset")
+        }
+        for child in [surface,clouds,atmosphere] {
+            child.geometry!.firstMaterial!.setValue(Float(biome.rawValue),forKey:"planetBiome")
+        }
     }
 
     func update(time: Float) {

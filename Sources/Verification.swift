@@ -26,28 +26,40 @@ func renderPlanetReview(directory: URL) {
     camera.camera!.wantsExposureAdaptation = false
     renderer.scene = scene; renderer.pointOfView = camera; scene.rootNode.addChildNode(camera)
     let sun = unit(V3(-0.4,0.3,0.86)), tangent = unit(simd_cross(sun,V3(0,1,0)))
+    func aimCamera(degrees: Float) {
+        let angle = degrees*Float.pi/180
+        camera.simdPosition = (sun*cos(angle)+tangent*sin(angle))*1050
+        camera.look(at:SCNVector3Zero)
+    }
+    func saveFrame(_ name: String, time: Float = 0) {
+        let image = renderer.snapshot(atTime:Double(time),with:NSSize(width:1200,height:900),antialiasingMode:.multisampling4X)
+        let bitmap = NSBitmapImageRep(data:image.tiffRepresentation!)!
+        try! bitmap.representation(using:.png,properties:[:])!.write(to:directory.appendingPathComponent("\(name).png"))
+    }
     for biome in PlanetBiome.allCases {
       for seed: UInt64 in [42,2026] {
         let planet = ProceduralPlanet(seed:seed,radius:300,sun:sun,biome:biome)
         scene.rootNode.addChildNode(planet.node)
-        for (name,degrees,time) in [("day",25.0,Float(0)),("terminator",80.0,0),("crescent",130.0,0),("night",165.0,0),("rotated",25.0,600)] {
-            let angle = Float(degrees)*Float.pi/180
-            camera.simdPosition = (sun*cos(angle)+tangent*sin(angle))*1050
-            camera.look(at:SCNVector3Zero)
+        for (name,degrees,time) in [("day",Float(25),Float(0)),("terminator",80,0),("crescent",130,0),("night",165,0),("rotated",25,600)] {
+            aimCamera(degrees:degrees)
             planet.update(time:time)
-            let image = renderer.snapshot(atTime:Double(time),with:NSSize(width:1200,height:900),antialiasingMode:.multisampling4X)
-            let bitmap = NSBitmapImageRep(data:image.tiffRepresentation!)!
-            try! bitmap.representation(using:.png,properties:[:])!.write(to:directory.appendingPathComponent("planet-\(biome.slug)-\(seed)-\(name).png"))
+            saveFrame("planet-\(biome.slug)-\(seed)-\(name)",time:time)
             print("Rendered planet \(biome.slug) \(seed) \(name)"); fflush(stdout)
             if biome == .temperate && seed == 42 && name == "day" {
                 for (layer,hideSurface,hideCloud,hideAtmosphere) in [("surface",false,true,true),("surface-clouds",false,false,true),("atmosphere",true,true,false)] {
                     planet.surface.isHidden = hideSurface; planet.clouds.isHidden = hideCloud; planet.atmosphere.isHidden = hideAtmosphere
-                    let preview = renderer.snapshot(atTime:0,with:NSSize(width:1200,height:900),antialiasingMode:.multisampling4X)
-                    let pixels = NSBitmapImageRep(data:preview.tiffRepresentation!)!
-                    try! pixels.representation(using:.png,properties:[:])!.write(to:directory.appendingPathComponent("planet-42-layer-\(layer).png"))
+                    saveFrame("planet-42-layer-\(layer)")
                 }
                 planet.surface.isHidden = false; planet.clouds.isHidden = false; planet.atmosphere.isHidden = false
             }
+        }
+        if biome == .temperate && seed == 42 {
+            aimCamera(degrees:25)
+            planet.update(time:0)
+            for _ in PlanetBiome.allCases { planet.nextBiome() }
+            check(planet.biome == biome,"Planet biome did not wrap after a full cycle")
+            planet.clouds.isHidden = true; planet.atmosphere.isHidden = true
+            saveFrame("planet-42-layer-surface-after-cycle")
         }
         planet.node.removeFromParentNode()
       }

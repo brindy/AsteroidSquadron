@@ -816,7 +816,22 @@ final class Overlay: NSView {
     }
 }
 
+final class FlightFrames: NSObject, SCNSceneRendererDelegate {
+    private let lock = NSLock()
+    private var latest = (count: 0, time: TimeInterval.zero)
+
+    func renderer(_ renderer: any SCNSceneRenderer, didRenderScene scene: SCNScene, atTime time: TimeInterval) {
+        lock.withLock {
+            latest.count += 1
+            latest.time = ProcessInfo.processInfo.systemUptime
+        }
+    }
+
+    var status: (count: Int, time: TimeInterval) { lock.withLock { latest } }
+}
+
 final class FlightView: SCNView {
+    let frames = FlightFrames()
     var keyHandler: ((String)->Void)?
     var activity: (()->Void)?
     private var dragWindowOrigin: NSPoint?
@@ -858,8 +873,16 @@ final class FlightView: SCNView {
 
 final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private static let pauseWhenUnfocusedKey = "PauseWhenUnfocused"
+    private static let renderTimeout: TimeInterval = 2
+    private static let renderSurfaceIdleLimit: TimeInterval = 30
     private var manuallyPaused = false
+    private var nextRenderCheck: TimeInterval?
+    private var renderingSuspendedAt: TimeInterval?
+    private var rendererRestarts = 0
     private var pauseWhenUnfocused: Bool { UserDefaults.standard.bool(forKey:Self.pauseWhenUnfocusedKey) }
+    private var shouldPauseSimulation: Bool {
+        manuallyPaused || (pauseWhenUnfocused && !(NSApp.isActive && window?.isKeyWindow == true))
+    }
     var window: NSWindow!
     var view: FlightView!
     var overlay: Overlay!
@@ -869,7 +892,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var lastTime = ProcessInfo.processInfo.systemUptime
     var lastActivity = ProcessInfo.processInfo.systemUptime
     var lastHUD: TimeInterval = 0
-    var startTime = ProcessInfo.processInfo.systemUptime
     var cameraTitle: NSTextField!
     var cameraDetail: NSTextField!
     var status: NSTextField!
@@ -909,16 +931,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.delegate = self; window.acceptsMouseMovedEvents = true
         window.setFrameAutosaveName("AsteroidSquadronWindow")
         if !window.setFrameUsingName("AsteroidSquadronWindow") { window.center() }
-        view = FlightView(frame:window.contentView!.bounds)
-        view.autoresizingMask = [.width,.height]
-        view.scene = battle.scene; view.pointOfView = battle.camera
-        view.backgroundColor = .black
-        view.antialiasingMode = .multisampling2X
-        view.preferredFramesPerSecond = 30
-        view.isPlaying = true; view.rendersContinuously = true
-        view.allowsCameraControl = false
-        view.keyHandler = { [weak self] key in self?.handleKey(key) }
-        view.activity = { [weak self] in self?.showControls() }
+        view = makeFlightView(frame:window.contentView!.bounds)
         window.contentView = view
         buildHUD()
         // Intercept the scene's drag before SceneKit's gesture recognizers consume it.
@@ -957,6 +970,19 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if CommandLine.arguments.contains("--smoke-test") {
             DispatchQueue.main.asyncAfter(deadline:.now()+3) { [weak self] in self?.smokeTest() }
         }
+    }
+    private func makeFlightView(frame: NSRect) -> FlightView {
+        let view = FlightView(frame:frame)
+        view.autoresizingMask = [.width,.height]
+        view.scene = battle.scene; view.pointOfView = battle.camera
+        view.backgroundColor = .black
+        view.antialiasingMode = highQuality ? .multisampling4X : .multisampling2X
+        view.preferredFramesPerSecond = highQuality ? 60 : 30
+        view.allowsCameraControl = false
+        view.delegate = view.frames
+        view.keyHandler = { [weak self] key in self?.handleKey(key) }
+        view.activity = { [weak self] in self?.showControls() }
+        return view
     }
     func buildMenu() {
         let bar = NSMenu()
@@ -1046,6 +1072,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         RunLoop.main.add(timer!,forMode:.common)
     }
     func tick() {
+        // Reconcile focus even if an activation or key-window notification was missed.
+        if battle.paused != shouldPauseSimulation { updatePauseState() }
         battle.viewportAspect = Float(view.bounds.width/max(1,view.bounds.height))
         let now = ProcessInfo.processInfo.systemUptime
         let dt = Float(min(0.08,now-lastTime)); lastTime = now
@@ -1054,9 +1082,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             battle.update(dt:dt)
             SCNTransaction.commit()
         }
+        updateRendering()
+        checkRendering(at:now)
         if now-lastHUD > 1 {
             lastHUD = now
-            let duration = Int(now-startTime)
+            let duration = Int(battle.time)
             telemetry.stringValue = String(format:"%02d %@ / %02d %@   ·   WAVE %02d   ·   %02d:%02d:%02d",battle.sideCount(0),battle.sideFactions[0].fighterName,battle.sideCount(1),battle.sideFactions[1].fighterName,battle.waveNumber,duration/3600,(duration/60)%60,duration%60)
             aceStatus.stringValue = battle.aceHUDStatus
             aceHistory.stringValue = String(format:"ACES EMERGED  %02d   ·   LONGEST SURVIVAL  %d %@",battle.acesEmerged,battle.longestEncounterStreak,battle.longestEncounterStreak == 1 ? "ENCOUNTER" : "ENCOUNTERS")
@@ -1139,7 +1169,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updateCameraHUD(); showControls()
     }
     @objc func nextBiome() {
-        if let planet = battle.planet { planet.setBiome(PlanetBiome.allCases[(planet.biome.rawValue+1)%PlanetBiome.allCases.count]) }
+        SCNTransaction.begin(); SCNTransaction.animationDuration = 0
+        battle.planet?.nextBiome()
+        SCNTransaction.commit()
+        view.needsDisplay = true
+        lastHUD = 0
         showControls()
     }
     @objc func togglePause() {
@@ -1155,16 +1189,61 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showControls()
     }
     private func updatePauseState() {
-        guard let window, let battle, let view, let pauseButton else { return }
-        let hasFocus = NSApp.isActive && window.isKeyWindow
-        let paused = manuallyPaused || (pauseWhenUnfocused && !hasFocus)
+        guard let battle, let pauseButton else { return }
+        let paused = shouldPauseSimulation
         if battle.paused != paused { lastTime = ProcessInfo.processInfo.systemUptime }
         battle.paused = paused
         pauseButton.title = manuallyPaused ? "▶" : "Ⅱ"
         pauseItem.title = manuallyPaused ? "Resume Flight" : "Pause Flight"
-        view.isPlaying = !paused
-        view.rendersContinuously = !paused
+        updateRendering()
         lastHUD = 0
+    }
+    private func updateRendering() {
+        guard let window, let battle, let view else { return }
+        let shouldRender = !battle.paused && window.occlusionState.contains(.visible) && !window.isMiniaturized
+        guard shouldRender != (nextRenderCheck != nil) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if !shouldRender {
+            nextRenderCheck = nil
+            renderingSuspendedAt = now
+            view.isPlaying = false
+            view.rendersContinuously = false
+            return
+        }
+
+        let idleDuration = renderingSuspendedAt.map { now-$0 } ?? 0
+        renderingSuspendedAt = nil
+        if idleDuration >= Self.renderSurfaceIdleLimit {
+            // An idle drawable can stay stale even when SceneKit reports rendering.
+            // Replace the surface on the next tick before trying to draw into it.
+            nextRenderCheck = now
+        } else {
+            nextRenderCheck = now+Self.renderTimeout
+            view.isPlaying = true
+            view.rendersContinuously = true
+            view.needsDisplay = true
+        }
+    }
+    private func checkRendering(at now: TimeInterval) {
+        guard let deadline = nextRenderCheck, now>=deadline else { return }
+        nextRenderCheck = now+Self.renderTimeout
+        guard let oldView = view else { return }
+        if oldView.isPlaying && now-oldView.frames.status.time<Self.renderTimeout { return }
+
+        // The simulation can advance even when SceneKit's view stops drawing.
+        // Give the same scene a fresh renderer and drawable without resetting the battle.
+        let restoreFocus = window.firstResponder === oldView
+        oldView.isPlaying = false; oldView.rendersContinuously = false
+        oldView.delegate = nil
+        view = makeFlightView(frame:oldView.frame)
+        view.sceneTime = oldView.sceneTime
+        window.contentView = view
+        overlay.frame = view.bounds
+        view.addSubview(overlay)
+        if restoreFocus { window.makeFirstResponder(view) }
+        rendererRestarts += 1
+        nextRenderCheck = nil
+        updateRendering()
     }
     @objc func toggleAwake() { if awake.enabled { awake.stop() } else { _ = awake.start() }; updateStatus(); showControls() }
     @objc func toggleHUD() { hudHidden.toggle(); overlay.isHidden = hudHidden; showControls() }
@@ -1191,7 +1270,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nFlight → Pause When Unfocused   Pause automatically when the window loses focus\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Cycle planet biomes\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. A pilot needs three survived encounters, six enemy kills, and a kill count above the previous Ace record. The current Ace carries a gold star. The title can stay vacant until the record is beaten. Without opponents, pilots patrol through and around the belt. Both squadrons attack Atlantis when it appears beyond the field. After its destruction, surviving fighters return to the belt. The HUD records distinct Ace pilots and the longest completed-encounter survival streak in this arena, even after pilots are lost. R resets these arena records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners."
+        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nFlight → Pause When Unfocused   Pause automatically when the window loses focus\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nB          Generate a new planet in the next biome\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. A pilot needs three survived encounters, six enemy kills, and a kill count above the previous Ace record. The current Ace carries a gold star. The title can stay vacant until the record is beaten. Without opponents, pilots patrol through and around the belt. Both squadrons attack Atlantis when it appears beyond the field. After its destruction, surviving fighters return to the belt. The HUD records distinct Ace pilots and the longest completed-encounter survival streak in this arena, even after pilots are lost. R resets these arena records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }
@@ -1208,6 +1287,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         updatePauseState()
     }
     func windowDidResignKey(_ notification: Notification) { updatePauseState() }
+    func windowDidChangeOcclusionState(_ notification: Notification) { updateRendering() }
+    func windowDidMiniaturize(_ notification: Notification) { updateRendering() }
+    func windowDidDeminiaturize(_ notification: Notification) { updateRendering() }
     func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
         window.screen?.visibleFrame ?? newFrame
     }
@@ -1234,6 +1316,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         stats["paused"] = battle.paused
         stats["pauseWhenUnfocused"] = pauseWhenUnfocused
         stats["windowFocused"] = NSApp.isActive && window.isKeyWindow
+        stats["windowVisible"] = window.occlusionState.contains(.visible)
+        stats["renderedFrames"] = view?.frames.status.count ?? 0
+        stats["rendererRestarts"] = rendererRestarts
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }
