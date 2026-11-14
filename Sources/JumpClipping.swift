@@ -4,11 +4,11 @@ import simd
 // The aperture's depth buffer cannot hide a hull that projects outside the
 // disk, or a hull seen from behind. Clip the travelling craft itself in world
 // space so every camera sees only the part that has crossed into normal space.
-private let jumpClipFragment = """
-#pragma arguments
+private let jumpClipArguments = """
 float jumpClipEnabled;
 float4 jumpClipPlane;
-#pragma body
+"""
+private let jumpClipBody = """
 if (jumpClipEnabled > 0.5) {
     float3 worldPosition = (scn_frame.inverseViewTransform * float4(_surface.position,1.0)).xyz;
     if (dot(float4(worldPosition,1.0),jumpClipPlane) < 0.0) { discard_fragment(); }
@@ -27,10 +27,16 @@ final class JumpClipper {
         collect(root); root.enumerateChildNodes { child,_ in collect(child) }
         materials = Array(unique.values)
         for m in materials {
-            // Babylon models use surface modifiers for their organic skin;
-            // retain those while adding the independent fragment clipping stage.
             var modifiers = m.shaderModifiers ?? [:]
-            modifiers[.fragment] = jumpClipFragment
+            if let fragment = modifiers[.fragment],
+               let insertion = fragment.range(of:"#pragma arguments")?.upperBound {
+                // Add the clip uniforms alongside the material's own arguments.
+                var clipped = fragment
+                clipped.insert(contentsOf:"\n"+jumpClipArguments,at:insertion)
+                modifiers[.fragment] = clipped+"\n"+jumpClipBody
+            } else {
+                modifiers[.fragment] = "#pragma arguments\n"+jumpClipArguments+"\n#pragma body\n"+jumpClipBody
+            }
             m.shaderModifiers = modifiers
             m.setValue(Float(0),forKey:"jumpClipEnabled")
             m.setValue(SCNVector4(0,0,0,0),forKey:"jumpClipPlane")

@@ -181,6 +181,9 @@ extension Dogfight {
             f.velocity += acceleration*dt
             f.forward = unit(f.velocity)
         }
+        let forwardAcceleration = max(0,simd_dot(acceleration,f.forward))
+        let afterburner = max(0,simd_length(f.velocity)/f.cruiseSpeed-1)
+        f.driveThrust = min(1,0.35+forwardAcceleration/f.accelerationLimit*0.6+afterburner*0.7)
         f.position += f.velocity*dt
         // Parallel-transport the cockpit up vector; don't rebuild a rolling ship from Euler angles.
         f.navigationUp = simd_quatf(from:oldForward,to:f.forward).act(f.navigationUp)

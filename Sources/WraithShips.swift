@@ -131,6 +131,7 @@ func wraithDart() -> SCNNode {
         ],material:recess,slices:12))
         ship.addChildNode(cylinder(0.27,0.41,recess,V3(side*0.53,0.08,4.48)))
         ship.addChildNode(cylinder(0.16,0.06,exhaust,V3(side*0.53,0.08,4.70)))
+        ship.addChildNode(EngineNozzle(at:V3(side*0.53,0.08,4.73),radius:0.16,tint:V3(1,0.25,0.065)))
         let gun = V3(side*0.50,-0.16,-3.14)
         ship.addChildNode(cylinder(0.14,1.04,recess,gun+V3(0,0,0.55)))
         addMuzzle(to:ship,at:gun,name:side<0 ? "left" : "right")

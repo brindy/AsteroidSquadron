@@ -153,7 +153,7 @@ extension Dogfight {
             f.entryTime = ship.start+2.5+Float(slot)*0.35
             f.entryPosition = ship.launchPosition(slot:slot,at:f.entryTime-ship.start)
             f.entryForward = ship.forward; f.formationSlot = slot; f.arrival = 0
-            f.hitPoints = 6; f.cooldown = 1.2; f.warp.isHidden = true; f.collisionCooldown = 25
+            f.hitPoints = Fighter.fullHull; f.cooldown = 1.2; f.warp.isHidden = true; f.collisionCooldown = 25
         }
     }
 
@@ -173,7 +173,7 @@ extension Dogfight {
                 f.state = .arriving; f.entry = .hyperspace; f.entryTime = start+1.25
                 f.entryPosition = origin+right*offset.x+V3(0,offset.y,0)+heading*offset.z
                 f.entryForward = heading; f.formationSlot = slot; f.arrival = 0
-                f.hitPoints = 6; f.cooldown = 1; f.collisionCooldown = 25
+                f.hitPoints = Fighter.fullHull; f.cooldown = 1; f.collisionCooldown = 25
             }
             formationArrivals += 1
             director.arrivalFlight = ArrivalFlight(indices:squadron,origin:origin,forward:heading,start:start)

@@ -28,6 +28,7 @@ func f302() -> SCNNode {
         engine.simdPosition.x = side*1.05
         ship.addChildNode(engine)
         ship.addChildNode(cylinder(0.37,0.23,exhaust,V3(side*1.05,0,4.63)))
+        ship.addChildNode(EngineNozzle(at:V3(side*1.05,0,4.75),radius:0.37,tint:V3(0.21,0.57,1)))
         ship.addChildNode(armorPlate([V3(side*1.18,0.32,1.3),V3(side*1.77,1.69,3.45),V3(side*1.66,1.43,4.23),V3(side*1.10,0.34,4.1)],depth:0.16,material:gray))
         ship.addChildNode(cylinder(0.13,1.8,panels,V3(side*0.85,-0.13,-2.65)))
         addMuzzle(to:ship,at:V3(side*0.85,-0.13,-3.57),name:side<0 ? "left" : "right")
@@ -44,6 +45,7 @@ func deathGlider() -> SCNNode {
     ship.addChildNode(armoredLoft([(-4.8,0.18,0.16,0),(-2.7,0.67,0.38,0),(1.45,0.92,0.49,0),(3.6,0.68,0.4,0)],mat:steel))
     ship.addChildNode(armoredLoft([(-3.5,0.18,0.11,0.33),(-2,0.56,0.43,0.45),(0.2,0.59,0.47,0.45),(1.3,0.35,0.15,0.42)],mat:canopy))
     ship.addChildNode(cylinder(0.46,0.25,exhaust,V3(0,0,3.65)))
+    ship.addChildNode(EngineNozzle(at:V3(0,0,3.78),radius:0.46,tint:V3(0.32,0.49,1)))
     for side: Float in [-1,1] {
         let stations: [(Float,Float,Float,Float)] = [(0.66,0.10,-1.3,2.75),(2.5,0.19,-0.55,3.1),(4.5,0.12,-0.2,2.1),(6.15,-0.42,-1.55,0.25),(7,-0.82,-3.2,-2.72)]
         for i in 0..<(stations.count-1) {

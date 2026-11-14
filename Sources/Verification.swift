@@ -559,7 +559,32 @@ func verifyCinematicOptics(renderDirectory: URL? = nil) {
     print("PASS: a large distant planet with restrained parallax; fighter focus matches the subject; native depth of field changes \(changed) sampled pixels.")
 }
 
+private func verifyEngineEffects() {
+    let smoke = EngineSmoke(seed:42)
+    for faction in Faction.allCases {
+        let fighter = Fighter(faction:faction,side:0,pair:0,trailing:false,cooldown:0)
+        let nozzles = fighter.engines.nozzles
+        check(!nozzles.isEmpty,"Missing exhaust for \(faction)")
+        let dt: Float = 1/60
+        fighter.engines.update(fighter,thrust:1,time:0,dt:dt,trail:smoke)
+        check(smoke.puffs.isEmpty,"Undamaged \(faction) emitted smoke")
+        fighter.hitPoints -= 1
+        fighter.engines.update(fighter,thrust:1,time:dt,dt:dt,trail:smoke)
+        check(smoke.puffs.count == 1 && nozzles.contains(where: {
+            $0.simdWorldTransform.columns.3.xyz == smoke.puffs[0].origin
+        }),"Damage smoke did not start at a nozzle for \(faction)")
+        let puff = smoke.puffs[0]
+        fighter.replaceFaction(faction)
+        smoke.update(dt:0.2)
+        check(puff.sprite.simdPosition == puff.origin+puff.velocity*0.2,"Replacing a fighter moved its smoke source")
+        smoke.update(dt:2)
+        check(smoke.puffs.isEmpty && smoke.node.childNodes.isEmpty,"Expired smoke left scene nodes behind")
+    }
+    print("PASS: all nine fighter models vent at their engine nozzles after damage; old smoke drifts and is removed.")
+}
+
 func verifySimulation() {
+    verifyEngineEffects()
     verifyCinematicOptics()
     verifyVeteransAndSkybox()
     verifyBabylon()
@@ -627,6 +652,8 @@ func verifySimulation() {
                     if !ship.node.isHidden { check(simd_distance(ship.node.simdPosition,ship.origin)<0.001,"Blink-FTL capital ship slid through space") }
                 }
                 if frame%60 == 0 {
+                    check(battle.engineSmoke.node.childNodes.count == battle.engineSmoke.puffs.count &&
+                          battle.engineSmoke.puffs.count<=EngineSmoke.capacity,"Leaked or unbounded engine smoke")
                     let expected = initialNodes+battle.lasers.count+battle.sparks.count+battle.effects.count+battle.blasts.count+battle.carriers.count*2
                     check(battle.scene.rootNode.childNodes.count == expected,"Leaked transient scene nodes")
                 }
@@ -875,6 +902,32 @@ func renderReview(directory: URL) {
         }
         ship.removeFromParentNode()
     }
+    camera.camera!.wantsHDR = true
+    camera.camera!.wantsExposureAdaptation = false
+    camera.camera!.bloomThreshold = 1.1
+    camera.camera!.bloomIntensity = 0.7
+    let fighter = Fighter(faction:.rebel,side:0,pair:0,trailing:false,cooldown:0)
+    let smoke = EngineSmoke(seed:42)
+    scene.rootNode.addChildNode(fighter.node)
+    scene.rootNode.addChildNode(smoke.node)
+    fighter.velocity = V3(0,0,-48)
+    camera.simdPosition = V3(14,7,20)
+    camera.look(at:SCNVector3(0,0,2))
+    fighter.engines.update(fighter,thrust:0.95,time:0,dt:0.5,trail:smoke)
+    save("engine-flare",at:0)
+    fighter.hitPoints = 2
+    for frame in 1...52 {
+        let dt: Float = 1.0/60
+        fighter.node.simdPosition += fighter.velocity*dt
+        smoke.update(dt:dt)
+        fighter.engines.update(fighter,thrust:0.48,time:Float(frame)*dt,dt:dt,trail:smoke)
+    }
+    camera.simdPosition = fighter.node.simdPosition+V3(20,9,24)
+    camera.look(at:SCNVector3(fighter.node.simdPosition+V3(0,0,10)))
+    save("engine-damage-trail",at:52/60.0)
+    fighter.node.removeFromParentNode()
+    smoke.node.removeFromParentNode()
+    camera.camera!.wantsHDR = false
     for (name,ship) in [("galactica",battlestarGalactica()),("basestar",cylonBasestar()),("wraith-hive",wraithHive())] {
         scene.rootNode.addChildNode(ship)
         for (index,position) in [V3(260,140,-300),V3(0,350,-110),V3(-250,90,280)].enumerated() {

@@ -110,8 +110,7 @@ func colonialViper() -> SCNNode {
         root.addChildNode(cylinder(0.25,0.10,armor,p+V3(0,0,-1.96)))
         root.addChildNode(cylinder(0.4,0.24,armor,p+V3(0,0,1.93)))
         root.addChildNode(cylinder(0.31,0.1,exhaust,p+V3(0,0,2.07)))
-        let plume = node(SCNSphere(radius:1),exhaust,p+V3(0,0,2.45))
-        plume.simdScale = V3(0.21,0.21,0.6); root.addChildNode(plume)
+        root.addChildNode(EngineNozzle(at:p+V3(0,0,2.12),radius:0.31,tint:V3(0.43,0.66,1)))
         for z: Float in [-0.2,0.35,0.9] { root.addChildNode(cylinder(0.505,0.04,armor,p+V3(0,0,z))) }
     }
     for sign: Float in [-1,1] {
@@ -161,6 +160,7 @@ func cylonRaider() -> SCNNode {
         root.addChildNode(cylinder(0.13,1.0,dark,V3(s*2.5,-0.2,-1.3)))
         addMuzzle(to:root,at:V3(s*2.5,-0.2,-1.88),name:"\(s)")
         root.addChildNode(cylinder(0.2,0.1,material(color(0.4,0.6,1),emission:color(0.35,0.7,1.4)),V3(s*1.6,-0.18,1.8)))
+        root.addChildNode(EngineNozzle(at:V3(s*1.6,-0.18,1.85),radius:0.20,tint:V3(0.36,0.56,1)))
     }
     return root
 }

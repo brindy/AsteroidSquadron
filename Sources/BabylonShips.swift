@@ -30,6 +30,7 @@ func starfury() -> SCNNode {
         for z: Float in [-0.8,0,0.8] { root.addChildNode(box(V3(1.34,0.08,0.18),edge,p+V3(0,sy*0.5,z))) }
         root.addChildNode(cylinder(0.48,0.2,dark,p+V3(0,0,2)))
         let drive = cylinder(0.33,0.10,glow,p+V3(0,0,2.13)); drive.name = "drive.\(sx).\(sy)"; root.addChildNode(drive)
+        root.addChildNode(EngineNozzle(at:p+V3(0,0,2.18),radius:0.33,tint:V3(0.24,0.57,1)))
         root.addChildNode(cylinder(0.25,0.18,dark,p+V3(0,0,-1.98)))
         // Small directional control jets give the pivot a visible physical cause.
         let jet = node(SCNSphere(radius:1),glow,p+V3(sx*0.7,sy*0.35,0))
@@ -97,6 +98,7 @@ private func shadowSkin() -> SCNMaterial {
 func shadowFighter() -> SCNNode {
     let root = SCNNode(), skin = shadowSkin()
     let body = node(SCNSphere(radius:1),skin,V3(0,0,0.4)); body.simdScale = V3(1.5,0.75,2.4); root.addChildNode(body)
+    root.addChildNode(EngineNozzle(at:V3(0,0,2.79),radius:0.22,tint:V3(0.56,0.13,1)))
     for side: Float in [-1,1] {
         root.addChildNode(shadowSpine([V3(side*0.8,0,1.4),V3(side*4.7,0.5,3.2),V3(side*6.8,0.2,-0.5),V3(side*3.6,0,-4.7)],radius:0.85,mat:skin))
         root.addChildNode(shadowSpine([V3(side*1,0,0),V3(side*3.4,-0.3,-1.7),V3(side*2.6,0.2,-4.5),V3(side*1.3,0,-5.8)],radius:0.45,mat:skin))

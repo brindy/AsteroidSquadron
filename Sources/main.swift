@@ -122,9 +122,7 @@ func xWing() -> SCNNode {
             foil.addChildNode(cylinder(0.12,0.07,hull,V3(sx * 1.15,0,-0.81)))
             foil.addChildNode(cylinder(0.34, 0.2, dark, V3(sx * 1.15, 0, 2.02)))
             foil.addChildNode(cylinder(0.245, 0.23, glow, V3(sx * 1.15, 0, 2.14)))
-            let flame = node(SCNSphere(radius: 1), glow, V3(sx * 1.15, 0, 2.53))
-            flame.simdScale = V3(0.19, 0.19, 0.75)
-            foil.addChildNode(flame)
+            foil.addChildNode(EngineNozzle(at:V3(sx*1.15,0,2.26),radius:0.245,tint:V3(1,0.15,0.36)))
             root.addChildNode(foil)
         }
     }
@@ -172,6 +170,7 @@ func tieFighter() -> SCNNode {
         }
         let glow = material(color(0.3, 0.8, 1), emission: color(0.3, 0.8, 1.3))
         root.addChildNode(cylinder(0.14, 0.15, glow, V3(s * 0.5, -0.25, 1.05)))
+        root.addChildNode(EngineNozzle(at:V3(s*0.5,-0.25,1.13),radius:0.14,tint:V3(0.23,0.66,1)))
     }
     return root
 }
@@ -183,7 +182,10 @@ struct Rock {
     let spin: V3
 }
 final class Fighter {
+    static let fullHull = 6
     let node = SCNNode()
+    private(set) var engines: FighterEngines
+    var driveThrust: Float = 0.45
     var faction: Faction
     let side: Int
     var generation = 0
@@ -233,7 +235,7 @@ final class Fighter {
     var active: Bool { state == .active }
     var arrival: Float = 0
     var arrivalDelay: Float = 0
-    var hitPoints = 6
+    var hitPoints = Fighter.fullHull
     enum Entry { case none, hyperspace, hangar, jumpWindow }
     var entry: Entry = .none
     var entryTime: Float = -1000
@@ -248,7 +250,9 @@ final class Fighter {
     init(faction: Faction, side: Int, pair: Int, trailing: Bool, cooldown: Float, isSiegeReserve: Bool = false) {
         self.faction = faction; self.side = side; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
         self.isSiegeReserve = isSiegeReserve
-        node.addChildNode(faction.fighterModel())
+        let model = faction.fighterModel()
+        engines = FighterEngines(model:model)
+        node.addChildNode(model)
         scanner = node.childNode(withName:"scanner",recursively:true)
         cacheMuzzles()
         let glow = material(color(0.55,0.85,1),emission:color(1.4,2.2,3))
@@ -260,13 +264,16 @@ final class Fighter {
         for child in node.childNodes { child.removeFromParentNode() }
         faction = replacement; generation += 1
         encountersSurvived = 0; enemyKills = 0; isAce = false; aceBadge.reset(); patrolRoute.removeAll(); atlantisEgress = nil
-        node.addChildNode(replacement.fighterModel())
+        let model = replacement.fighterModel()
+        engines = FighterEngines(model:model)
+        driveThrust = 0.45
+        node.addChildNode(model)
         scanner = node.childNode(withName:"scanner",recursively:true)
         cacheMuzzles()
         state = .destroyed; node.isHidden = true; node.opacity = 1
         node.simdScale = V3(repeating:1); warp.isHidden = true
         entry = .none; entryTime = -1000; spin = nil; attackTarget = nil
-        arrival = 0; hitPoints = 6; collisionCooldown = 25
+        arrival = 0; hitPoints = Self.fullHull; collisionCooldown = 25
         motionInitialized = false; velocity = .zero; navigationUp = V3(0,1,0); bank = 0
         history.removeAll(keepingCapacity:true); breakUntil = -1
         pursuitTarget = nil; pursuitGeneration = -1; pursuitDeadline = 0; breakSpeed = 0; burstShotsLeft = 0
@@ -384,6 +391,7 @@ final class Dogfight {
     var effects: [Transient] = []
     var clouds: [GasCloud] = []
     var blasts: [ExplosionVolume] = []
+    let engineSmoke: EngineSmoke
     var carriers: [Carrier] = []
     var carrier: Carrier? { director.featuredCarrier ?? carriers.first(where:{$0.start<=time}) ?? carriers.first }
     var sideFactions: [Faction] = [.rebel,.empire]
@@ -471,6 +479,7 @@ final class Dogfight {
     init(seed: UInt64 = UInt64.random(in:1...UInt64.max), initialFactions: [Faction]? = nil, initialArrivals: Bool = true,
          firstAtlantisEncounter: ClosedRange<Int>? = Atlantis.firstEncounterWindow) {
         self.seed = seed
+        engineSmoke = EngineSmoke(seed:seed)
         // Siege timing varies by sector without consuming the combat random stream.
         var siegeRandom = Random(state:seed ^ 0x4154_4C41_4E54_4953)
         nextAtlantisEncounter = firstAtlantisEncounter.map { $0.lowerBound + siegeRandom.index($0.count) }
@@ -536,6 +545,7 @@ final class Dogfight {
                 f.collisionCooldown = rng.range(15,45)
             }
         }
+        scene.rootNode.addChildNode(engineSmoke.node)
         persistentNodeCount = scene.rootNode.childNodes.count
         if initialArrivals {
             for f in fighters { f.state = .destroyed; f.node.isHidden = true }
@@ -705,6 +715,7 @@ final class Dogfight {
         updateLasers(dt); updateSparks(dt); updateEffects(dt)
         updateAtlantis(dt,starts:positions,wasActive:active)
         updateReinforcements(dt); updateCarrier(); updateFighterJumpClipping(); updateAce(); updateCamera(dt); updateBlasts(dt)
+        updateEngines(dt)
         for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
         planet?.update(time:time)
     }
