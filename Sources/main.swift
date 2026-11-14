@@ -327,60 +327,6 @@ struct Transient {
     let duration: Float
 }
 
-func rockGeometry(seed: UInt64) -> SCNGeometry {
-    var rng = Random(state: seed)
-    let rings = 9, slices = 14
-    let phase = rng.range(0,tau)
-    var vertices: [SCNVector3] = []
-    for y in 0...rings {
-        let phi = Float(y) / Float(rings) * .pi
-        for x in 0...slices {
-            let theta = Float(x % slices) / Float(slices) * tau
-            let r: Float = 1 + 0.11*sin(theta*3+phase)*sin(phi)*sin(phi) + 0.08*cos(phi*4+phase) + 0.055*sin(theta*5-phi*3+phase)*sin(phi)
-            vertices.append(SCNVector3(sin(phi) * cos(theta) * r, cos(phi) * r, sin(phi) * sin(theta) * r))
-        }
-    }
-    var indices: [Int32] = []
-    for y in 0..<rings {
-        for x in 0..<slices {
-            let a = Int32(y * (slices+1) + x), b = a + Int32(slices+1)
-            indices += [a,a+1,b, a+1,b+1,b]
-        }
-    }
-    // Per-face normals keep a chipped, faceted silhouette.
-    var flat: [SCNVector3] = [], normals: [SCNVector3] = []
-    for i in stride(from: 0, to: indices.count, by: 3) {
-        let a = V3(vertices[Int(indices[i])]), b = V3(vertices[Int(indices[i+1])]), c = V3(vertices[Int(indices[i+2])])
-        let normal = unit(simd_cross(b-a, c-a))
-        flat += [SCNVector3(a), SCNVector3(b), SCNVector3(c)]
-        normals += [SCNVector3(normal), SCNVector3(normal), SCNVector3(normal)]
-    }
-    let uv = flat.map { v -> CGPoint in
-        let p = unit(V3(v)); return CGPoint(x: CGFloat(atan2(p.z,p.x) / tau + 0.5), y: CGFloat(acos(p.y) / .pi))
-    }
-    return SCNGeometry(sources: [SCNGeometrySource(vertices: flat), SCNGeometrySource(normals: normals), SCNGeometrySource(textureCoordinates: uv)], elements: [SCNGeometryElement(indices: (0..<Int32(flat.count)).map{$0}, primitiveType: .triangles)])
-}
-
-func stoneTexture(seed: UInt64) -> NSImage {
-    let size = 256
-    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: size*4, bitsPerPixel: 32)!
-    var rng = Random(state: seed)
-    let data = bitmap.bitmapData!
-    for y in 0..<size {
-        for x in 0..<size {
-            let broad = sin(Float(x)*0.11+cos(Float(y)*0.045)*3) * 0.07 + cos(Float(y)*0.15+Float(x)*0.05)*0.055
-            let b = rng.range(0.36,0.65) + broad
-            let i = (y*size+x)*4
-            data[i] = UInt8(max(0,min(255,b*220)))
-            data[i+1] = UInt8(max(0,min(255,b*207)))
-            data[i+2] = UInt8(max(0,min(255,b*193)))
-            data[i+3] = 255
-        }
-    }
-    let image = NSImage(size: NSSize(width:size,height:size)); image.addRepresentation(bitmap)
-    return image
-}
-
 final class Dogfight {
     let scene = SCNScene()
     let camera = SCNNode()
@@ -570,15 +516,10 @@ final class Dogfight {
         }
     }
     func makeRocks() {
-        let texture = stoneTexture(seed:seed)
         var geometries: [SCNGeometry] = []
         for _ in 0..<12 {
             _ = rng.next()
-            let g = rockGeometry(seed:rng.state)
-            let m = material(color(0.47,0.43,0.38),metal:0.13)
-            m.diffuse.contents = texture
-            m.roughness.contents = 0.94
-            g.materials = [m]; geometries.append(g)
+            geometries.append(asteroidGeometry(seed:rng.state))
         }
         for i in 0..<245 {
             var p: V3
