@@ -87,13 +87,12 @@ final class Carrier {
     var blinkExited = false
     var arrivalDuration: Float { faction.usesJumpWindow ? 2.1 : (faction.usesBlinkFTL ? 0.85 : 1.4) }
     var cameraBounds: V3 {
-        switch faction { case .colonial: return V3(82,30,136); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(73,36,145); case .goauld: return V3(106,74,106); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
+        switch faction { case .colonial: return V3(82,30,136); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(73,36,145); case .goauld: return V3(129,68,120); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
     }
     // The Imperial bridge is above the hull. Centering its exclusion volume at
     // the origin incorrectly blocked empty space beneath the launch bay.
     var cameraCenter: V3 {
         if faction == .empire { return V3(0,26,0) }
-        if faction == .goauld { return V3(0,39,0) }
         return .zero
     }
     var cameraVolumes: [(V3,V3)] {
@@ -107,6 +106,9 @@ final class Carrier {
             return [(V3(0,2,-4),V3(34,32,140)),
                     (V3(-51,-5,-7),V3(18,12,80)),
                     (V3(51,-5,-7),V3(18,12,80))]
+        case .goauld:
+            return [(V3(0,-20,0),V3(83,88,83)),
+                    (V3(0,7,0),V3(129,28,120))]
         case .wraith:
             return [(V3(0,1,0),V3(32,27,155)),
                     (V3(-66,7,5),V3(43,32,141)),
@@ -167,7 +169,7 @@ final class Carrier {
         case .earth: port = portalOnly ? V3(sign*(4+Float(slot/2)*3),Float(slot%3-1)*3,0) : V3(sign*13,-5,-132)
         case .rebel: port = V3(sign*24,-16,-46)
         case .tauri: port = V3(sign*51,-6,-87)
-        case .goauld: port = V3(sign*29,-18,-74)
+        case .goauld: port = HaTak.launchPort(side:sign)
         case .wraith: port = V3(sign*wraithHangarMouth.x,wraithHangarMouth.y,wraithHangarMouth.z-1)
         case .empire:
             let mouth = Self.imperialLaunchPort

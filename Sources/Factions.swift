@@ -39,7 +39,7 @@ enum Faction: String, CaseIterable, Hashable {
         case .earth: return "EARTH ALLIANCE JUMP POINT"
         case .shadow: return "SHADOW CAPITAL SHIP"
         case .tauri: return "DAEDALUS"
-        case .goauld: return "GOA’ULD MOTHERSHIP"
+        case .goauld: return "HA’TAK MOTHERSHIP"
         case .wraith: return "WRAITH HIVE SHIP"
         }
     }
@@ -75,7 +75,7 @@ enum Faction: String, CaseIterable, Hashable {
         case .earth: return omegaDestroyer()
         case .rebel: return monCalamariCruiser()
         case .tauri: return daedalus()
-        case .goauld: return goauldMothership()
+        case .goauld: return haTakMothership()
         case .wraith: return wraithHive()
         default: return imperialCarrier()
         }

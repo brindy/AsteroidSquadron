@@ -1031,7 +1031,8 @@ func renderReview(directory: URL) {
     fighter.node.removeFromParentNode()
     smoke.node.removeFromParentNode()
     camera.camera!.wantsHDR = false
-    for (name,ship) in [("galactica",battlestarGalactica()),("basestar",cylonBasestar()),("wraith-hive",wraithHive())] {
+    for (name,ship) in [("galactica",battlestarGalactica()),("basestar",cylonBasestar()),
+                        ("hatak",haTakMothership()),("wraith-hive",wraithHive())] {
         scene.rootNode.addChildNode(ship)
         for (index,position) in [V3(260,140,-300),V3(0,350,-110),V3(-250,90,280)].enumerated() {
             camera.simdPosition = position
@@ -1051,6 +1052,14 @@ func renderReview(directory: URL) {
             camera.simdPosition = V3(-GalacticaFlightPod.centerX-11,0,GalacticaFlightPod.mouth-38)
             camera.look(at:SCNVector3(-GalacticaFlightPod.centerX,GalacticaFlightPod.centerY,GalacticaFlightPod.mouth))
             save("galactica-flight-pod",at:0)
+        }
+        if name == "hatak" {
+            let previousFOV = camera.camera!.fieldOfView
+            camera.camera!.fieldOfView = 43
+            camera.simdPosition = V3(-69,77,-325)
+            camera.look(at:SCNVector3(0,0,-10))
+            save("hatak-reference-angle",at:0)
+            camera.camera!.fieldOfView = previousFOV
         }
         ship.removeFromParentNode()
     }

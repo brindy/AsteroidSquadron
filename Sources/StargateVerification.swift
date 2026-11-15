@@ -11,6 +11,33 @@ private func stargateCheck(_ condition: @autoclosure () -> Bool, _ message: Stri
     }
 }
 
+private func verifyHaTakLaunchClearance(_ ship: Carrier) {
+    let scene = SCNScene()
+    let model = haTakMothership()
+    scene.rootNode.addChildNode(model)
+    let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)
+    renderer.scene = scene
+    // SceneKit builds the hit-test geometry when it first presents the scene.
+    _ = renderer.snapshot(atTime:0,with:NSSize(width:32,height:32),antialiasingMode:.none)
+    let options = [SCNHitTestOption.backFaceCulling.rawValue:false]
+    for slot in 0..<2 {
+        let station = ship.station(2.5)
+        let launch = ship.node.simdOrientation.inverse.act(ship.launchPosition(slot:slot,at:2.5)-station)/ship.scale
+        func hits(_ offset: V3) -> Bool {
+            let start = SCNVector3(launch+offset+V3(0,0,12))
+            let end = SCNVector3(launch+offset-V3(0,0,38))
+            return !model.hitTestWithSegment(from:start,to:end,options:options).isEmpty
+        }
+        stargateCheck(hits(V3(11.8,0,0)),"The Ha’tak bay wall was missing from the hit-test mesh")
+        for x: Float in [-7,0,7] {
+            for y: Float in [-0.9,0,0.95] {
+                stargateCheck(!hits(V3(x,y,0)),"The Ha’tak hull blocks a Death Glider launch")
+            }
+        }
+    }
+    print("PASS: Both Death Glider bays have solid walls and clear launch corridors.")
+}
+
 func verifyStargate(renderDirectory: URL? = nil) {
     let patrol = Dogfight(seed:7302,initialFactions:[.tauri,.wraith],initialArrivals:false,firstAtlantisEncounter:nil)
     let pilot = patrol.fighters[0]
@@ -62,9 +89,18 @@ func verifyStargate(renderDirectory: URL? = nil) {
         let b = Dogfight(seed:7303,initialFactions:[faction,.rebel],firstAtlantisEncounter:nil)
         let ship = b.carriers.first!
         stargateCheck(ship.faction==faction && ship.squadron.count==6,"\(faction) did not receive its own carrier")
+        if faction == .goauld { verifyHaTakLaunchClearance(ship) }
         var renderedLaunch = false
-        for _ in 0..<360 {
+        for frame in 0..<360 {
             b.update(dt:dt)
+            if faction == .goauld {
+                switch frame {
+                case 94: save("hatak-arrival",battle:b)
+                case 155: save("hatak-launch-close",battle:b)
+                case 258: save("hatak-pullback",battle:b)
+                default: break
+                }
+            }
             if !renderedLaunch && b.time>3.8 {
                 save("\(faction.rawValue)-launch",battle:b)
                 renderedLaunch = true
@@ -302,7 +338,7 @@ func verifyStargate(renderDirectory: URL? = nil) {
 
     // In particular, two fleets that normally insert fighters directly still
     // have their own capital hulls for the siege, with their native jump styles.
-    for faction: Faction in [.rebel,.earth,.colonial,.shadow,.wraith] {
+    for faction: Faction in [.rebel,.earth,.colonial,.shadow,.goauld,.wraith] {
         let battle = prepareSoloSiege(faction,seed:7305)
         let city = battle.atlantis!
         for fighter in battle.fighters { fighter.cooldown = 1000 }
@@ -333,6 +369,6 @@ func verifyStargate(renderDirectory: URL? = nil) {
         stargateCheck(!faction.usesJumpWindow || sawWindow,"\(faction) skipped the opening jump window")
         stargateCheck(!faction.usesBlinkFTL || assault.ship.blinkEntered,"The assault skipped blink FTL")
     }
-    print("PASS: Rebel, Earth Alliance and Wraith siege hulls, jump-window and blink arrivals, and capital-only shield hits.")
+    print("PASS: Siege hulls including the Ha’tak, jump-window and blink arrivals, and capital-only shield hits.")
     fflush(stdout)
 }

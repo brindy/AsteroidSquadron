@@ -99,37 +99,3 @@ func daedalus() -> SCNNode {
     }
     return ship
 }
-
-func goauldMothership() -> SCNNode {
-    let ship = SCNNode()
-    let gold = material(color(0.65,0.46,0.19),metal:0.6)
-    let dark = material(color(0.19,0.13,0.064),metal:0.62)
-    let amber = material(color(1,0.62,0.18),emission:color(2.5,0.81,0.09))
-    let saucer = SCNCylinder(radius:103,height:13)
-    saucer.radialSegmentCount = 8
-    ship.addChildNode(node(saucer,dark,V3(0,-6,0)))
-    let apron = SCNCylinder(radius:94,height:9)
-    apron.radialSegmentCount = 8
-    ship.addChildNode(node(apron,gold,V3(0,3,0)))
-    let pyramid = hullMesh([
-        V3(-71.5,7,-71.5),V3(71.5,7,-71.5),V3(71.5,7,71.5),V3(-71.5,7,71.5),V3(0,109,0)
-    ],faces:[[0,1,2,3],[0,4,1],[1,4,2],[2,4,3],[3,4,0]],mat:gold)
-    ship.addChildNode(pyramid)
-    for i in 0..<12 {
-        let height = 10+Float(i)*7.5
-        let size = 143*(109-height)/102+0.75
-        for side: Float in [-1,1] {
-            ship.addChildNode(box(V3(size,0.8,0.9),dark,V3(0,height,side*size/2)))
-            ship.addChildNode(box(V3(0.9,0.8,size),dark,V3(side*size/2,height,0)))
-        }
-    }
-    for i in 0..<24 {
-        let a = Float(i)*tau/24
-        ship.addChildNode(box(V3(2,1.7,2),amber,V3(sin(a)*95,-5,cos(a)*95)))
-    }
-    for x: Float in [-29,29] {
-        ship.addChildNode(box(V3(22,8,27),dark,V3(x,-17,-59),chamfer:1.5))
-        ship.addChildNode(box(V3(18,0.8,0.8),amber,V3(x,-21.1,-73)))
-    }
-    return ship
-}

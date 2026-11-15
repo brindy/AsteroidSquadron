@@ -116,7 +116,7 @@ final class AtlantisAssault {
         case .earth: mount = V3(15,13,-106)
         case .shadow: mount = V3(18,12,-30)
         case .tauri: mount = V3(12,9,-86)
-        case .goauld: mount = V3(29,-18,-66)
+        case .goauld: mount = HaTak.battery
         case .wraith: mount = V3(18,13,-98)
         }
         let turret = material(color(0.28,0.34,0.38),metal:0.66)
