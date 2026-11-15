@@ -165,48 +165,6 @@ func cylonRaider() -> SCNNode {
     return root
 }
 
-func battlestarGalactica() -> SCNNode {
-    let root = SCNNode()
-    let hull = material(color(0.35,0.38,0.39),metal:0.6)
-    let plates = material(color(0.48,0.49,0.46),metal:0.45)
-    let ribs = material(color(0.19,0.23,0.24),metal:0.65)
-    let dark = material(color(0.018,0.025,0.03),metal:0.4)
-    let red = material(color(0.35,0.035,0.02),metal:0.2)
-    let light = material(color(0.75,0.8,0.9),emission:color(0.7,0.9,1.3))
-    root.addChildNode(box(V3(38,22,153),hull,V3(0,0,18),chamfer:9))
-    root.addChildNode(armoredLoft([(-119,14,5,0),(-113,24,8,0),(-88,29,11,0),(-47,23,9,0),(-36,19,8,0)],mat:plates))
-    for z in stride(from:Float(-105),through:-48,by:10) {
-        root.addChildNode(box(V3(42,0.7,2),ribs,V3(0,10,z),chamfer:0.2))
-    }
-    root.addChildNode(box(V3(25,9,37),hull,V3(0,15,-24),chamfer:4))
-    root.addChildNode(box(V3(14,6,18),plates,V3(0,22,-26),chamfer:2))
-    root.addChildNode(box(V3(10,0.6,0.5),light,V3(0,23,-35)))
-    for side: Float in [-1,1] {
-        for z: Float in [-38,38] { root.addChildNode(box(V3(38,8,13),ribs,V3(side*35,-2,z),chamfer:2)) }
-        let pod = box(V3(25,14,166),hull,V3(side*57,-3,1),chamfer:6)
-        root.addChildNode(pod)
-        root.addChildNode(box(V3(18,8,1.0),dark,V3(side*57,-3,-82.2)))
-        root.addChildNode(box(V3(18,0.45,1.0),light,V3(side*57,-7.1,-83)))
-        root.addChildNode(box(V3(18,1.0,132),plates,V3(side*57,4.2,5),chamfer:0.5))
-        root.addChildNode(box(V3(3,1.1,130),red,V3(side*57,4.8,5)))
-        for z in stride(from:Float(-67),through:70,by:9) {
-            root.addChildNode(box(V3(26,1.2,2),ribs,V3(side*57,3.4,z),chamfer:0.3))
-        }
-        for z in stride(from:Float(-20),through:65,by:12) {
-            root.addChildNode(box(V3(7,3,6),ribs,V3(side*13,13,z)))
-            root.addChildNode(segment(V3(side*13,15,z),V3(side*13,15,z-8),radius:0.5,mat:plates))
-        }
-    }
-    for z in stride(from:Float(-27),through:75,by:7) {
-        root.addChildNode(box(V3(40,1.8,2.0),plates,V3(0,10.7,z),chamfer:0.4))
-    }
-    for x: Float in [-12,-4,4,12] {
-        root.addChildNode(cylinder(4,1,ribs,V3(x,-1,96)))
-        root.addChildNode(cylinder(2.9,0.3,light,V3(x,-1,96.7)))
-    }
-    return root
-}
-
 func cylonBasestar() -> SCNNode {
     let root = SCNNode()
     let metal = material(color(0.37,0.4,0.42),metal:0.85)

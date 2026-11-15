@@ -87,7 +87,7 @@ final class Carrier {
     var blinkExited = false
     var arrivalDuration: Float { faction.usesJumpWindow ? 2.1 : (faction.usesBlinkFTL ? 0.85 : 1.4) }
     var cameraBounds: V3 {
-        switch faction { case .colonial: return V3(84,30,130); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(73,36,145); case .goauld: return V3(106,74,106); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
+        switch faction { case .colonial: return V3(82,30,136); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(73,36,145); case .goauld: return V3(106,74,106); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
     }
     // The Imperial bridge is above the hull. Centering its exclusion volume at
     // the origin incorrectly blocked empty space beneath the launch bay.
@@ -98,6 +98,11 @@ final class Carrier {
     }
     var cameraVolumes: [(V3,V3)] {
         switch faction {
+        case .colonial:
+            let pod = V3(GalacticaFlightPod.centerX,GalacticaFlightPod.centerY+2,22)
+            return [(V3(0,0,-76),V3(45,26,67)),
+                    (V3(0,0,48),V3(41,25,89)),
+                    (pod,V3(21,20,76)),(V3(-pod.x,pod.y,pod.z),V3(21,20,76))]
         case .tauri:
             return [(V3(0,2,-4),V3(34,32,140)),
                     (V3(-51,-5,-7),V3(18,12,80)),
@@ -156,7 +161,7 @@ final class Carrier {
         let sign: Float = slot%2 == 0 ? -1 : 1
         let port: V3
         switch faction {
-        case .colonial: port = V3(sign*57,-3,-90)
+        case .colonial: port = GalacticaFlightPod.launchPort(side:sign)
         case .cylon: port = V3(sign*20,-34,-30)
         case .shadow: port = V3(sign*22,-32,-56)
         case .earth: port = portalOnly ? V3(sign*(4+Float(slot/2)*3),Float(slot%3-1)*3,0) : V3(sign*13,-5,-132)

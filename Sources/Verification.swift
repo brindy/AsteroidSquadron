@@ -810,6 +810,32 @@ private func verifyBlinkCarriers() {
         for f in b.fighters where f.side == 0 { b.destroy(f) }
         b.deployReinforcements(side:0)
         let ship = b.carriers[0]
+        if faction == .colonial {
+            // Probe across the deck, including the Viper's swept envelope.
+            // A capped mouth or an outrigger piercing the liner fails this check.
+            let scene = SCNScene()
+            let model = battlestarGalactica()
+            scene.rootNode.addChildNode(model)
+            // SceneKit populates its hit-test geometry after the first frame.
+            let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)
+            renderer.scene = scene
+            _ = renderer.snapshot(atTime:0,with:CGSize(width:32,height:32),antialiasingMode:.none)
+            let options = [SCNHitTestOption.backFaceCulling.rawValue:false]
+            for slot in 0..<2 {
+                let launch = ship.launchPosition(slot:slot,at:2.5)
+                let local = ship.node.simdOrientation.inverse.act(launch-ship.origin)/ship.scale
+                let wall = SCNVector3(local+V3(0,6,5))
+                check(!model.hitTestWithSegment(from:SCNVector3(local+V3(0,6,-16)),to:wall,
+                                                options:options).isEmpty,"Segment test did not detect Galactica's launch rim")
+                for x: Float in [-9,-3.9,0,3.9,9] { for y: Float in [-0.5,0,2.8] {
+                    let start = V3(local.x+x,local.y+y,GalacticaFlightPod.rear+4)
+                    let end = local+V3(x,y,-20)
+                    check(model.hitTestWithSegment(from:SCNVector3(start),to:SCNVector3(end),
+                                                   options:options).isEmpty,
+                          "Galactica's flight pod obstructed a Viper launch")
+                } }
+            }
+        }
         for _ in 0..<390 {
             for f in b.fighters { f.cooldown = 10000; f.collisionCooldown = 10000 }
             b.update(dt:1.0/30.0)
@@ -1011,6 +1037,20 @@ func renderReview(directory: URL) {
             camera.simdPosition = position
             camera.look(at:SCNVector3(0,0,0),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
             save("\(name)-\(index+1)",at:0)
+        }
+        if name == "galactica" {
+            let previousFOV = camera.camera!.fieldOfView
+            let previousAmbient = ambient.light!.intensity
+            camera.camera!.fieldOfView = 46
+            ambient.light!.intensity = 320
+            camera.simdPosition = V3(-164,110,-233)
+            camera.look(at:SCNVector3(0,0,-22))
+            save("galactica-reference-angle",at:0)
+            ambient.light!.intensity = previousAmbient
+            camera.camera!.fieldOfView = previousFOV
+            camera.simdPosition = V3(-GalacticaFlightPod.centerX-11,0,GalacticaFlightPod.mouth-38)
+            camera.look(at:SCNVector3(-GalacticaFlightPod.centerX,GalacticaFlightPod.centerY,GalacticaFlightPod.mouth))
+            save("galactica-flight-pod",at:0)
         }
         ship.removeFromParentNode()
     }
