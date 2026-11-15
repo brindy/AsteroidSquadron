@@ -164,7 +164,6 @@ extension Dogfight {
             switch effects[i].kind {
             case .flash: n.opacity = CGFloat(t*t); n.simdScale = V3(repeating:0.6+age*1.4)
             case .light: n.light?.intensity = CGFloat(5000*exp(-age*8))
-            case .arrival: n.simdScale = V3(repeating:0.3+t*3); n.opacity = CGFloat(t)
             case .jump: n.simdScale = V3(repeating:0.35+age*1.2); n.opacity = CGFloat(t*t)
             }
             if effects[i].life<=0 { n.removeFromParentNode(); effects.remove(at:i) }

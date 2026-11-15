@@ -364,14 +364,16 @@ final class CinematicDirector {
     }
 
     private func planetaryReveal(origin: V3, subject: V3, points: [V3], distance: Float,
-                                 age: Float, cue: Float, elevation: Float = 0.24, in b: Dogfight)
+                                 age: Float, cue: Float, elevation: Float = 0.24,
+                                 approach: V3? = nil, in b: Dogfight)
         -> (position: V3, look: V3, fov: Float, roll: Float) {
         let up = V3(0,1,0)
         let outward = unit(b.planetPosition-origin)
         let right = unit(simd_cross(outward,up))
-        let lateral = simd_dot(origin,right)>0 ? -right : right
+        let lateral = simd_dot(approach ?? origin,right)>0 ? -right : right
+        let lateralOffset: Float = approach == nil ? 0.32 : 0.92
         let range = distance/max(0.58,min(1,b.viewportAspect))
-        let position = origin+range*(-outward+lateral*0.32+up*elevation)-lateral*distance*0.028*age
+        let position = origin+range*(-outward+lateral*lateralOffset+up*elevation)-lateral*distance*0.028*age
         let shipSightline = unit(subject-position)
         let planetSightline = unit(b.planetPosition-position)
         // The operator holds the wide frame until the jump, pans a beat late,
@@ -416,8 +418,13 @@ final class CinematicDirector {
             subject = mix(portal,ship.origin,0.4)
             distance = max(710,window.radius*2.15)
             cue = ship.jumpClipper == nil ? 0.38 : 1.4
+        } else if let trail = ship.hyperspaceTrail, age<ship.arrivalDuration, !trail.isHidden {
+            points.append(trail.point.simdPosition)
+            subject = mix(subject,trail.point.simdPosition,0.14)
+            cue = ship.arrivalDuration*0.65
         }
-        return planetaryReveal(origin:ship.origin,subject:subject,points:points,distance:distance,age:age,cue:cue,in:b)
+        return planetaryReveal(origin:ship.origin,subject:subject,points:points,distance:distance,
+                               age:age,cue:cue,approach:ship.hyperspaceTrail == nil ? nil : ship.forward,in:b)
     }
 
     private func atlantisReveal(_ city: Atlantis, age: Float, in b: Dogfight)
@@ -523,6 +530,17 @@ final class CinematicDirector {
         let distance = simd_length(offset)+(carrierDollyDistance-simd_length(offset))*pull
         let position: V3 = focus+focusVelocity*(Float(2)/7)+outward*distance
         let look: V3 = focus+up*2
+        if ship.hyperspaceTrail != nil, !ship.isSiegeShip, age>ship.departureAge {
+            let progress = (age-ship.departureAge)/ship.departureDuration
+            let pan = hyperspaceRamp(progress,from:0.02,to:0.60)
+            let station = ship.station(ship.departureAge)
+            let start = station-ship.forward*ship.sternOffset
+            let end = ship.hyperspaceDeparturePoint
+            let routeCenter = (start+end)*0.5
+            let sideDistance = simd_distance(start,end)*1.22/max(0.60,min(1,b.viewportAspect))
+            let widePosition = routeCenter-right*sideDistance+up*(sideDistance*0.12)
+            return (mix(position,widePosition,pan),mix(look,routeCenter,pan))
+        }
         return (position,look)
     }
     func update(_ dt: Float, in b: Dogfight) {
@@ -548,7 +566,10 @@ final class CinematicDirector {
             let right = unit(simd_cross(flight.forward,up))
             let closeAt: Float = 1.8
             if age<closeAt {
-                let points = flight.indices.map { b.fighters[$0].entryPosition }
+                let points = flight.indices.flatMap { index -> [V3] in
+                    let fighter = b.fighters[index]
+                    return fighter.warp.isHidden ? [fighter.entryPosition] : [fighter.entryPosition,fighter.warp.point.simdPosition]
+                }
                 let anchor = flight.origin+flight.forward*max(0,age-1.25)*28
                 (desired,look,fov,roll) = planetaryReveal(origin:flight.origin,subject:anchor,points:points,
                     distance:285,age:age,cue:1.14,in:b)

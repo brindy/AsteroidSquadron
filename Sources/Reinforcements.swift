@@ -200,17 +200,17 @@ extension Dogfight {
         let progress = max(0,min(1,1+(time-f.entryTime)/1.25))
         f.arrival = progress; f.forward = f.entryForward
         let remaining = 1-progress
-        f.position = f.entryPosition-f.forward*1400*pow(remaining,4)
-        f.node.isHidden = progress<0.82; f.node.opacity = CGFloat(max(0,min(1,(progress-0.82)/0.1)))
-        f.warp.isHidden = false
-        let length = max(1,remaining*280)
-        f.warp.simdPosition = f.position-f.forward*length*0.5
-        f.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:f.forward)
-        f.warp.simdScale = V3(1,1,length); f.warp.opacity = CGFloat(remaining)
+        let appearance = hyperspaceRamp(progress,from:0.55,to:0.67)
+        f.position = f.entryPosition-f.forward*(1400*pow(remaining,4)+f.entrySpeed*1.25*remaining)
+        f.node.isHidden = appearance == 0; f.node.opacity = CGFloat(appearance)
+        if time>=f.entryTime-1.25 {
+            f.warp.arrive(distant:f.entryPosition-f.forward*960,stern:f.position-f.forward*7,
+                          progress:progress,width:3.1)
+        }
         if progress>=1 {
             f.state = .active; f.node.opacity = 1; f.warp.isHidden = true
             activateFlight(f,position:f.entryPosition+f.entryForward*f.entrySpeed*max(0,time-f.entryTime),forward:f.entryForward,speed:f.entrySpeed)
-            arrivalFlash(at:f.entryPosition); reinforcements += 1
+            reinforcements += 1
         }
         return true
     }
@@ -221,18 +221,16 @@ extension Dogfight {
         jumpPulse(at:ship.origin,radius:ship.worldRadius*1.25)
     }
 
-    func updateCapitalWarp(_ ship: Carrier, position: V3, length: Float) {
-        ship.warp.isHidden = length<1
-        ship.warp.simdPosition = position-ship.forward*length*0.5
-        ship.warp.simdOrientation = simd_quatf(from:V3(0,0,-1),to:ship.forward)
-        ship.warp.simdScale = V3(ship.scale,ship.scale,max(1,length))
-    }
-
     func capitalHyperspaceEntry(_ ship: Carrier, age: Float) -> V3 {
-        let t = age/ship.arrivalDuration
-        let position = ship.origin-ship.forward*2800*pow(1-t,4)
-        ship.node.isHidden = t<0.68
-        updateCapitalWarp(ship,position:position,length:(1-t)*1000)
+        let t = min(1,max(0,age/ship.arrivalDuration))
+        let drift: Float = ship.isSiegeShip ? 0 : 3
+        let position = ship.origin-ship.forward*(2800*pow(1-t,4)+drift*ship.arrivalDuration*(1-t))
+        let appearance = hyperspaceRamp(t,from:0.55,to:0.67)
+        ship.node.isHidden = appearance == 0
+        ship.node.opacity = CGFloat(appearance)
+        ship.hyperspaceTrail?.arrive(distant:ship.hyperspaceArrivalPoint,
+                                    stern:position-ship.forward*ship.sternOffset,
+                                    progress:t,width:ship.scale*4.5)
         return position
     }
 
@@ -245,7 +243,6 @@ extension Dogfight {
                 director.requestCarrierArrival(ship,in:self)
             }
             var position = ship.station(age)
-            var beam: Float = 0
             if ship.faction.usesJumpWindow {
                 position = updateJumpWindow(ship,age:age)
             } else if ship.faction.usesBlinkFTL {
@@ -265,7 +262,7 @@ extension Dogfight {
                     ship.node.isHidden = true
                 }
             } else {
-                if age<1.4 {
+                if age<ship.arrivalDuration {
                     ship.node.simdPosition = capitalHyperspaceEntry(ship,age:age)
                     continue
                 }
@@ -274,11 +271,24 @@ extension Dogfight {
                         ship.departing = true; carrierDepartures += 1
                         director.requestCarrierDeparture(ship,in:self)
                     }
-                    let t = min(1,(age-ship.departureAge)/1.4)
-                    position += ship.forward*3000*pow(t,3)
-                    ship.node.isHidden = t>0.7; beam = t*1500
-                } else { ship.node.isHidden = false }
-                updateCapitalWarp(ship,position:position,length:beam)
+                    let t = min(1,(age-ship.departureAge)/ship.departureDuration)
+                    let flight = min(1,t/0.63)
+                    let start = position-ship.forward*ship.sternOffset
+                    let end = mix(start,ship.hyperspaceDeparturePoint,pow(flight,3))
+                    position = end+ship.forward*ship.sternOffset
+                    let hull = 1-hyperspaceRamp(flight,from:0.87,to:1)
+                    ship.node.isHidden = hull == 0
+                    ship.node.opacity = CGFloat(hull)
+                    let retreat = hyperspaceRamp(t,from:0.63,to:0.96)
+                    let visibility = 1-hyperspaceRamp(t,from:0.89,to:1)
+                    ship.hyperspaceTrail?.show(from:mix(start,end,retreat),to:end,lightAt:end,
+                                               width:ship.scale*4.5,opacity:visibility,
+                                               pointOpacity:hyperspaceRamp(flight,from:0.84,to:1)*visibility)
+                } else {
+                    ship.node.isHidden = false
+                    ship.node.opacity = 1
+                    ship.warp.isHidden = true
+                }
             }
             ship.node.simdPosition = position
             let linger = ship.departureDuration

@@ -430,7 +430,7 @@ private func verifyContinuousDeployments() {
                 check(closeDistance!<125,"\(faction) launch shot did not begin close to the first fighter: \(closeDistance!)")
                 check(simd_dot(unit(f.position-b.cameraPosition),unit(b.cameraLook-b.cameraPosition))>0.98,"Launching fighter is outside the composition")
             }
-            if age>4.28 && age<ship.departureAge+ship.departureDuration-0.02 {
+            if age>4.28 && age<ship.departureAge {
                 let group = ship.squadron.map { b.fighters[$0].position }.reduce(V3.zero,+)/Float(ship.squadron.count)
                 wideDistance = simd_distance(b.cameraPosition,group)
                 check(simd_distance(b.cameraLook,group)<4,"Pullback stopped tracking the fighter group")
@@ -583,8 +583,77 @@ private func verifyEngineEffects() {
     print("PASS: all nine fighter models vent at their engine nozzles after damage; old smoke drifts and is removed.")
 }
 
+private func verifyHyperspaceTrails() {
+    let b = Dogfight(seed:772,initialFactions:[.rebel,.empire],initialArrivals:false)
+    b.automatic = false
+    let direction = unit(V3(0.63,0.02,-0.78))
+    func extent(_ trail: HyperspaceTrail) -> (near: Float, far: Float) {
+        let center = simd_dot(trail.streak.simdPosition,direction)
+        return (center-trail.streak.simdScale.y,center+trail.streak.simdScale.y)
+    }
+    func verifyArrival(_ trail: HyperspaceTrail, distant: V3, sample: (Float) -> (Bool,V3),
+                       sternOffset: Float, label: String) {
+        let first = sample(0.12)
+        check(first.0 && !trail.isHidden && trail.streak.isHidden &&
+              simd_distance(trail.point.simdPosition,distant)<0.01,"\(label) did not start with a distant point")
+        _ = sample(0.33)
+        let growing = extent(trail)
+        let atHull = sample(0.68)
+        let extended = extent(trail)
+        check(!atHull.0 && !trail.streak.isHidden && abs(growing.near-simd_dot(distant,direction))<0.015 &&
+              extended.far>growing.far+10,"\(label) streak did not grow toward the arriving ship")
+        check(abs(extended.far-(simd_dot(atHull.1,direction)-sternOffset))<0.015,
+              "\(label) streak did not meet the stern")
+        _ = sample(0.88)
+        check(extent(trail).near>extended.near+20,"\(label) distant endpoint did not catch up with the hull")
+    }
+    for faction in Faction.allCases where !faction.usesBlinkFTL && !faction.usesJumpWindow {
+        let ship = Carrier(faction:faction,origin:V3(25,70,-120),forward:direction,start:0,squadron:[])
+        b.carriers = [ship]
+        let trail = ship.hyperspaceTrail!
+        verifyArrival(trail,distant:ship.hyperspaceArrivalPoint,sample:{ progress in
+            b.time = ship.arrivalDuration*progress
+            b.updateCarrier()
+            return (ship.node.isHidden,ship.node.simdPosition)
+        },sternOffset:ship.sternOffset,label:faction.rawValue)
+        let start = ship.station(ship.departureAge)-direction*ship.sternOffset
+        b.time = ship.departureAge+ship.departureDuration*0.34
+        b.updateCarrier()
+        let growing = extent(trail)
+        check(!trail.streak.isHidden && abs(growing.near-simd_dot(start,direction))<0.01,
+              "\(faction) departure streak slid away from the launch point")
+        b.time = ship.departureAge+ship.departureDuration*0.64
+        b.updateCarrier()
+        let extended = extent(trail)
+        check(ship.node.isHidden && !trail.streak.isHidden && extended.far>growing.far+10 &&
+              simd_distance(trail.point.simdPosition,ship.hyperspaceDeparturePoint)<0.01,
+              "\(faction) ship did not disappear at the distant light")
+        b.time = ship.departureAge+ship.departureDuration*0.85
+        b.updateCarrier()
+        let retracting = extent(trail)
+        check(retracting.near>extended.near+100 && abs(retracting.far-extended.far)<0.01,
+              "\(faction) trail retracted from the wrong end")
+        b.time = ship.departureAge+ship.departureDuration+0.01
+        b.updateCarrier()
+        check(trail.isHidden && b.carriers.isEmpty,"\(faction) left a detached hyperspace trail")
+    }
+    let fighter = b.fighters.first { $0.faction == .rebel }!
+    fighter.state = .arriving; fighter.entry = .hyperspace; fighter.entryTime = 1.25
+    fighter.entryForward = direction
+    verifyArrival(fighter.warp,distant:fighter.entryPosition-direction*960,sample:{ progress in
+        b.time = 1.25*progress
+        _ = b.updateArrival(fighter)
+        return (fighter.node.isHidden,fighter.position)
+    },sternOffset:7,label:"X-wing")
+    b.time = 1.25
+    _ = b.updateArrival(fighter)
+    check(fighter.warp.isHidden && fighter.active,"X-wing trail remained after formation entry")
+    print("PASS: hyperspace arrival streaks grow to the ship and catch up; departures leave a fixed streak that retracts toward the distant point.")
+}
+
 func verifySimulation() {
     verifyEngineEffects()
+    verifyHyperspaceTrails()
     verifyCinematicOptics()
     verifyVeteransAndSkybox()
     verifyBabylon()
@@ -837,16 +906,24 @@ func renderReview(directory: URL) {
         let age = battle.director.eventAge
         switch battle.director.event {
         case .formation:
-            if age>0.95 && age<1.05 { name = "formation-hyperspace" }
+            if age>0.54 && age<0.60 { name = "formation-hyperspace" }
             if age>1.52 && age<1.6 { name = "formation-planet" }
             if age>2.5 && age<2.6 { name = "formation-held" }
             if age>4.7 && age<4.8 { name = "formation-break" }
         case .carrierArrival:
+            if age>0.10 && age<0.16 { name = "carrier-hyperspace-point" }
+            if age>0.60 && age<0.66 { name = "carrier-hyperspace-growing" }
+            if age>0.93 && age<0.99 { name = "carrier-hyperspace" }
             if age>2.55 && age<2.65 { name = "carrier-launch-close" }
             if age>1.6 && age<1.7 { name = "carrier-arrival" }
             if age>3.7 && age<3.8 { name = "carrier-hangar" }
             if age>4.26 && age<4.36 { name = "carrier-pullback" }
-            if let ship = battle.director.featuredCarrier, battle.time-ship.start>ship.departureAge+0.55 { name = "carrier-departure" }
+            if let ship = battle.director.featuredCarrier {
+                let sinceDeparture = battle.time-ship.start-ship.departureAge
+                if sinceDeparture>0.10 && sinceDeparture<0.15 { name = "carrier-departure-acceleration" }
+                if sinceDeparture>0.78 && sinceDeparture<0.84 { name = "carrier-departure" }
+                if sinceDeparture>1.17 && sinceDeparture<1.23 { name = "carrier-departure-retracting" }
+            }
         case .carrierDeparture:
             if age>0.55 && age<0.65 { name = "carrier-departure" }
         case .handoff:

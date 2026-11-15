@@ -246,7 +246,7 @@ final class Fighter {
     var spin: SpinOut?
     var collisionCooldown: Float = 20
     var formationHold: Float { (entry == .hyperspace || entry == .jumpWindow) ? 2.1+Float(formationSlot)*0.13 : 0.8+Float(formationSlot)*0.08 }
-    let warp = SCNNode()
+    let warp = HyperspaceTrail()
     init(faction: Faction, side: Int, pair: Int, trailing: Bool, cooldown: Float, isSiegeReserve: Bool = false) {
         self.faction = faction; self.side = side; self.pair = pair; self.trailing = trailing; self.cooldown = cooldown
         self.isSiegeReserve = isSiegeReserve
@@ -255,10 +255,6 @@ final class Fighter {
         node.addChildNode(model)
         scanner = node.childNode(withName:"scanner",recursively:true)
         cacheMuzzles()
-        let glow = material(color(0.55,0.85,1),emission:color(1.4,2.2,3))
-        warp.addChildNode(box(V3(0.3,0.3,1),glow))
-        warp.addChildNode(box(V3(0.85,0.85,1),material(color(0.15,0.4,1,0.25),emission:color(0.15,0.4,1,0.25))))
-        warp.isHidden = true
     }
     func replaceFaction(_ replacement: Faction) {
         for child in node.childNodes { child.removeFromParentNode() }
@@ -320,7 +316,7 @@ struct Spark {
     let kind: Kind
 }
 struct Transient {
-    enum Kind { case flash, light, arrival, jump }
+    enum Kind { case flash, light, jump }
     let node: SCNNode
     let kind: Kind
     var life: Float
@@ -675,13 +671,6 @@ final class Dogfight {
         updateAce()
     }
 
-    func arrivalFlash(at p: V3) {
-        let m = material(color(0.5,0.8,1),emission:color(1.1,1.8,2.5))
-        let g = SCNSphere(radius:1); g.segmentCount = 12
-        let n = node(g,m,p); n.simdScale = V3(3,3,3)
-        scene.rootNode.addChildNode(n)
-        effects.append(Transient(node:n,kind:.arrival,life:0.45,duration:0.45))
-    }
     func clearCamera(_ point: V3, insideAtlantisShield: Bool = false) -> V3 {
         var p = point
         let activeCapitals = carriers+(atlantis?.assault.map { [$0.ship] } ?? [])
