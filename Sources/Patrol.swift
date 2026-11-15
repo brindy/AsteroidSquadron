@@ -1,6 +1,19 @@
 import simd
 
 extension Dogfight {
+    func plotVictoryReposition(for side: Int, awayFrom arrival: V3) {
+        let local = arenaRotation.inverse.act(arrival)
+        let up = arenaRotation.act(V3(0,1,0))
+        let away = arenaRotation.act(unit(V3(-local.x,0,-local.z)))
+        let across = simd_cross(away,up)
+        for fighter in fighters where fighter.side == side && fighter.state != .destroyed {
+            let column = Float(fighter.pair/2)-1
+            let row: Float = fighter.trailing ? 1 : -1
+            fighter.victoryWaypoint = clearFlight(away*(700+row*57)+across*(column*115)+up*(row*41))
+            fighter.patrolRoute.removeAll(keepingCapacity:true)
+        }
+    }
+
     // Long, fixed legs alternate between the belt's interior and its outer edge.
     // Plan against rock clearance, then let the normal flight controller fly the route.
     func patrolDestination(for fighter: Fighter) -> V3 {

@@ -115,7 +115,7 @@ final class AtlantisAssault {
         case .cylon: mount = V3(9,18,-21)
         case .earth: mount = V3(15,13,-106)
         case .shadow: mount = V3(18,12,-30)
-        case .tauri: mount = V3(12,9,-86)
+        case .tauri: mount = Daedalus.battery
         case .goauld: mount = HaTak.battery
         case .wraith: mount = V3(18,13,-98)
         }

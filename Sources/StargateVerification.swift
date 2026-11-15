@@ -11,9 +11,10 @@ private func stargateCheck(_ condition: @autoclosure () -> Bool, _ message: Stri
     }
 }
 
-private func verifyHaTakLaunchClearance(_ ship: Carrier) {
+private func verifyHangarClearance(_ ship: Carrier) {
+    let isDaedalus = ship.faction == .tauri
     let scene = SCNScene()
-    let model = haTakMothership()
+    let model = ship.faction.capitalModel()
     scene.rootNode.addChildNode(model)
     let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)
     renderer.scene = scene
@@ -24,18 +25,20 @@ private func verifyHaTakLaunchClearance(_ ship: Carrier) {
         let station = ship.station(2.5)
         let launch = ship.node.simdOrientation.inverse.act(ship.launchPosition(slot:slot,at:2.5)-station)/ship.scale
         func hits(_ offset: V3) -> Bool {
-            let start = SCNVector3(launch+offset+V3(0,0,12))
-            let end = SCNVector3(launch+offset-V3(0,0,38))
+            let start = SCNVector3(launch+offset+V3(0,0,isDaedalus ? 65 : 12))
+            let end = SCNVector3(launch+offset-V3(0,0,isDaedalus ? 100 : 38))
             return !model.hitTestWithSegment(from:start,to:end,options:options).isEmpty
         }
-        stargateCheck(hits(V3(11.8,0,0)),"The Ha’tak bay wall was missing from the hit-test mesh")
-        for x: Float in [-7,0,7] {
-            for y: Float in [-0.9,0,0.95] {
-                stargateCheck(!hits(V3(x,y,0)),"The Ha’tak hull blocks a Death Glider launch")
+        stargateCheck(hits(V3(isDaedalus ? 11.4 : 11.8,0,0)),
+                      "\(ship.faction.carrierName) bay wall was missing from the hit-test mesh")
+        let wingtip: Float = isDaedalus ? 5.85 : 7
+        for x in [-wingtip,0,wingtip] {
+            for y: Float in [-0.9,0,isDaedalus ? 1.7 : 0.95] {
+                stargateCheck(!hits(V3(x,y,0)),"\(ship.faction.carrierName) blocks its fighter launch")
             }
         }
     }
-    print("PASS: Both Death Glider bays have solid walls and clear launch corridors.")
+    print("PASS: Both \(ship.faction.carrierName) hangars have solid walls and clear launch corridors.")
 }
 
 func verifyStargate(renderDirectory: URL? = nil) {
@@ -89,7 +92,7 @@ func verifyStargate(renderDirectory: URL? = nil) {
         let b = Dogfight(seed:7303,initialFactions:[faction,.rebel],firstAtlantisEncounter:nil)
         let ship = b.carriers.first!
         stargateCheck(ship.faction==faction && ship.squadron.count==6,"\(faction) did not receive its own carrier")
-        if faction == .goauld { verifyHaTakLaunchClearance(ship) }
+        if faction == .tauri || faction == .goauld { verifyHangarClearance(ship) }
         var renderedLaunch = false
         for frame in 0..<360 {
             b.update(dt:dt)
@@ -98,6 +101,14 @@ func verifyStargate(renderDirectory: URL? = nil) {
                 case 94: save("hatak-arrival",battle:b)
                 case 155: save("hatak-launch-close",battle:b)
                 case 258: save("hatak-pullback",battle:b)
+                default: break
+                }
+            }
+            if faction == .tauri {
+                switch frame {
+                case 94: save("daedalus-arrival",battle:b)
+                case 155: save("daedalus-launch-close",battle:b)
+                case 258: save("daedalus-pullback",battle:b)
                 default: break
                 }
             }
@@ -320,14 +331,24 @@ func verifyStargate(renderDirectory: URL? = nil) {
     // deadline, since observing the start can lag by half a display frame.
     stargateCheck(regroupDeadline.map { b.time>=$0 } == true,"The returning fighters did not get a patrol interval")
     let ready = b.nextAtlantisEncounter!
-    for f in b.fighters { f.cooldown = 10000 }
-    for _ in 0..<1080 { b.update(dt:1.0/30) }
+    // Isolate the cooldown boundary from incidental asteroid and dogfight losses.
+    b.rocks.removeAll()
+    func awaitDeployedSquadrons() {
+        for _ in 0..<1080 {
+            for f in b.fighters { f.cooldown = 10000; f.collisionCooldown = 10000 }
+            if b.sideCount(0)>0 && b.sideCount(1)>0 && b.fleetRequests.isEmpty &&
+               b.arrivingCount==0 && b.carriers.isEmpty { return }
+            b.update(dt:1.0/30)
+        }
+        stargateCheck(false,"Both sides did not regroup during the Atlantis cooldown fixture")
+    }
+    awaitDeployedSquadrons()
     b.encountersCompleted = ready-2
     for f in b.fighters where f.side==1 && f.active { b.destroy(f) }
     b.updateReinforcements(0)
     stargateCheck(b.atlantisAttackingSide == nil && b.encountersCompleted==ready-1,
                   "Atlantis became eligible before its scheduled return")
-    for _ in 0..<1080 { b.update(dt:dt) }
+    awaitDeployedSquadrons()
     b.encountersCompleted = ready-1
     for f in b.fighters where f.side==1 && f.active { b.destroy(f) }
     b.updateReinforcements(0)

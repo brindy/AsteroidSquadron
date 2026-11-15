@@ -85,17 +85,23 @@ extension Dogfight {
         var goal: V3
         if let city = atlantis, city.intact {
             goal = atlantisDestination(for:f,city:city,speed:&speed)
+            f.victoryWaypoint = nil
             f.pursuitDeadline = 0
             f.pivotUntil = -100
         } else {
             let target = chooseTarget(for:f)
+            if let waypoint = f.victoryWaypoint,
+               fleetTruce || simd_distance_squared(waypoint,f.position)<90*90 {
+                f.victoryWaypoint = nil
+            }
             if target == nil {
-                goal = patrolDestination(for:f)
+                goal = f.victoryWaypoint ?? patrolDestination(for:f)
             } else {
                 f.patrolRoute.removeAll(keepingCapacity:true)
-                goal = orbitPath(f,time+2.5)
+                goal = f.victoryWaypoint ?? orbitPath(f,time+2.5)
             }
             if var index = target, simd_length(positions[index])<1100, radial<1300 {
+                f.victoryWaypoint = nil
                 if f.spin == nil {
                     if f.pursuitTarget != index || f.pursuitGeneration != fighters[index].generation || f.pursuitDeadline<=0 {
                         f.pursuitTarget = index; f.pursuitGeneration = fighters[index].generation
@@ -116,7 +122,8 @@ extension Dogfight {
                 }
             } else {
                 f.pursuitDeadline = 0
-                if target == nil { f.breakUntil = -1; f.pivotUntil = -100 }
+                if target == nil || f.victoryWaypoint != nil { f.breakUntil = -1; f.pivotUntil = -100 }
+                if f.victoryWaypoint != nil { speed = max(speed,132) }
             }
         }
         var desired = time<f.breakUntil ? f.breakDirection : unit(goal-f.position)

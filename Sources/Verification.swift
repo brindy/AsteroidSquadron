@@ -665,6 +665,7 @@ func verifySimulation() {
     verifyWeaponsAndMotion()
     verifyPlanetaryReveals()
     verifyContinuousDeployments()
+    verifyVictoryReposition()
     verifyFactionLifecycle()
     verifyBlinkCarriers()
     verifyFormationAndControl()
@@ -761,6 +762,44 @@ func verifySimulation() {
     let repeatA = Dogfight(seed:1234), repeatB = Dogfight(seed:1234)
     check(repeatA.rocks.map(\.position) == repeatB.rocks.map(\.position),"Seed is not reproducible")
     print("PASS: different seeds randomize the arena; identical seeds reproduce it.")
+}
+
+private func verifyVictoryReposition() {
+    let b = Dogfight(seed:1825,initialFactions:[.rebel,.tauri],initialArrivals:false,firstAtlantisEncounter:nil)
+    b.automatic = false
+    b.rocks.removeAll()
+    let survivors = b.fighters.filter { $0.side == 1 }
+    for f in b.fighters {
+        f.cooldown = 10000; f.collisionCooldown = 10000
+        if f.side == 0 { b.destroy(f) }
+    }
+    b.updateReinforcements(0)
+    let request = b.fleetRequests[0]
+    check((4.5...6.0).contains(request.countdown),"The victors did not get a head start")
+    let local = b.arenaRotation.inverse.act(request.lane.origin)
+    let away = b.arenaRotation.act(unit(V3(-local.x,0,-local.z)))
+    let waypoints = survivors.compactMap(\.victoryWaypoint)
+    check(waypoints.count == survivors.count && waypoints.allSatisfy { simd_dot($0,away)>600 },
+          "The victors did not plot to the far side of the belt")
+    check(Set(waypoints).count == survivors.count,"Victory routes stack the fighters on one point")
+    for (fighter,point) in zip(survivors,waypoints) {
+        b.activateFlight(fighter,position:point-away*860,forward:away,speed:fighter.cruiseSpeed)
+    }
+    for _ in 0..<120 { b.update(dt:1.0/30.0) }
+    check(b.pendingSides.contains(request.side) && b.arrivingCount == 0,"The next squadron arrived before the head start expired")
+    check(zip(survivors,waypoints).allSatisfy { simd_distance($0.position,$1)<600 },
+          "The winning squadron didn't fly toward the far side before the arrival")
+    for _ in 0..<90 where b.pendingSides.contains(request.side) { b.update(dt:1.0/30.0) }
+    check(b.carriers.first?.origin == request.lane.origin || b.director.arrivalFlight?.origin == request.lane.origin,
+          "The replacement did not use the reserved approach")
+    let fighter = survivors[0]
+    let enemy = b.fighters.first { $0.side == request.side }!
+    b.activateFlight(enemy,position:fighter.position+away*110,forward:-away,speed:55)
+    enemy.state = .active
+    b.updateFlight(fighter,dt:1.0/60,positions:b.fighters.map(\.position),
+                   velocities:b.fighters.map(\.velocity),active:b.fighters.map(\.active))
+    check(fighter.victoryWaypoint == nil && fighter.pursuitDeadline>b.time,"The victor did not break from repositioning to engage")
+    print("PASS: Victors spread out on the opposite side of the reserved arrival lane, get a head start, and break to engage.")
 }
 
 private func verifyFactionLifecycle() {
@@ -1032,7 +1071,7 @@ func renderReview(directory: URL) {
     smoke.node.removeFromParentNode()
     camera.camera!.wantsHDR = false
     for (name,ship) in [("galactica",battlestarGalactica()),("basestar",cylonBasestar()),
-                        ("hatak",haTakMothership()),("wraith-hive",wraithHive())] {
+                        ("hatak",haTakMothership()),("daedalus",daedalus()),("wraith-hive",wraithHive())] {
         scene.rootNode.addChildNode(ship)
         for (index,position) in [V3(260,140,-300),V3(0,350,-110),V3(-250,90,280)].enumerated() {
             camera.simdPosition = position
@@ -1059,6 +1098,17 @@ func renderReview(directory: URL) {
             camera.simdPosition = V3(-69,77,-325)
             camera.look(at:SCNVector3(0,0,-10))
             save("hatak-reference-angle",at:0)
+            camera.camera!.fieldOfView = previousFOV
+        }
+        if name == "daedalus" {
+            let previousFOV = camera.camera!.fieldOfView
+            camera.camera!.fieldOfView = 44
+            camera.simdPosition = V3(205,170,-240)
+            camera.look(at:SCNVector3(0,4,-7))
+            save("daedalus-reference-angle",at:0)
+            camera.simdPosition = V3(-154,64,242)
+            camera.look(at:SCNVector3(0,2,50))
+            save("daedalus-engines",at:0)
             camera.camera!.fieldOfView = previousFOV
         }
         ship.removeFromParentNode()

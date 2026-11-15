@@ -39,18 +39,21 @@ extension Dogfight {
         // Credit and stage the winning squadron's replacements first. Global
         // arrival scheduling then keeps the next enemy behind that deployment.
         creditEncounter(surviving:winner)
-        queueFactionReplacement(for:side)
+        queueFactionReplacement(for:side, afterVictory:sideCount(winner)>0)
     }
 
-    func queueFactionReplacement(for side: Int) {
+    func queueFactionReplacement(for side: Int, afterVictory: Bool = false) {
         squadronEncounters[side] = 0
         let previous = sideFactions[side]
         let options = Faction.allCases.filter { $0 != previous && $0 != sideFactions[1-side] }
         let next = options[rng.index(options.count)]
         sideFactions[side] = next
         for f in fighters where f.side == side { f.replaceFaction(next); f.orbitRate = rng.range(0.17,0.21) }
+        let lane = arrivalLane(for:next,side:side)
+        if afterVictory { plotVictoryReposition(for:1-side,awayFrom:lane.origin) }
         pendingSides.insert(side)
-        fleetRequests.append(FleetRequest(side:side,countdown:rng.range(2.5,4.5)))
+        let delay = afterVictory ? rng.range(4.5,6.0) : rng.range(2.5,4.5)
+        fleetRequests.append(FleetRequest(side:side,lane:lane,countdown:delay))
         replacementCount += 1
         replacements.append(FleetReplacement(side:side,defeated:previous,incoming:next,time:time))
         if replacements.count>64 { replacements.removeFirst(replacements.count-64) }
@@ -74,9 +77,9 @@ extension Dogfight {
         for i in fleetRequests.indices.reversed() {
             fleetRequests[i].countdown -= dt
             if fleetRequests[i].countdown<=0 {
-                let side = fleetRequests[i].side
-                fleetRequests.remove(at:i); pendingSides.remove(side)
-                deployReinforcements(side:side)
+                let request = fleetRequests.remove(at:i)
+                pendingSides.remove(request.side)
+                deployReinforcements(side:request.side,lane:request.lane)
             }
         }
     }
@@ -87,7 +90,7 @@ extension Dogfight {
         }
     }
 
-    private func arrivalLane(for faction: Faction, side: Int) -> (origin: V3, forward: V3) {
+    private func arrivalLane(for faction: Faction, side: Int) -> ArrivalLane {
         let radial = unit(V3(planetPosition.x,0,planetPosition.z))
         let tangent = unit(simd_cross(radial,V3(0,1,0)))
         // The two fleets stage on opposite sides of the sightline to the planet.
@@ -107,10 +110,10 @@ extension Dogfight {
         let origin = radial*distance+tangent*(sign*(offset+rng.range(-50,50)))
             + V3(0,unit(planetPosition).y*1500+rng.range(120,200),0)
         let forward = unit(-radial-tangent*course)
-        return (origin,forward)
+        return ArrivalLane(origin:origin,forward:forward)
     }
 
-    func deployReinforcements(side: Int, topUp: Bool = false) {
+    func deployReinforcements(side: Int, topUp: Bool = false, lane: ArrivalLane? = nil) {
         let roster = fighters.indices.filter { fighters[$0].side == side && !fighters[$0].isSiegeReserve }
         let squadron = topUp ? roster.filter { fighters[$0].state == .destroyed } : roster
         guard !squadron.isEmpty, squadron.allSatisfy({fighters[$0].state == .destroyed}) else { return }
@@ -118,7 +121,7 @@ extension Dogfight {
             guard sideCount(side)>0, squadronEncounters[side]>=2 else { return }
             topUpWaves += 1
         }
-        deploySquadron(squadron,side:side)
+        deploySquadron(squadron,side:side,lane:lane)
     }
 
     func atlantisReinforcements(for side: Int) -> [Int] {
@@ -157,13 +160,14 @@ extension Dogfight {
         }
     }
 
-    func deploySquadron(_ squadron: [Int], side: Int) {
+    func deploySquadron(_ squadron: [Int], side: Int, lane: ArrivalLane? = nil) {
         guard !squadron.isEmpty else { return }
         let faction = sideFactions[side]
         let start = max(time,nextArrivalTime)
         nextArrivalTime = start+(faction == .shadow ? 7.2 : 6.5)
         waveNumber += 1
-        let (origin,heading) = arrivalLane(for:faction,side:side)
+        let approach = lane ?? arrivalLane(for:faction,side:side)
+        let origin = approach.origin, heading = approach.forward
         if faction == .rebel {
             // The whole V can form up outside the rocks before splitting.
             let slots: [V3] = [V3(0,0,0),V3(-14,-1,-13),V3(14,-1,-13),V3(-28,-2,-26),V3(28,-2,-26),V3(0,8,-32)]

@@ -104,7 +104,13 @@ struct FleetReplacement {
 
 struct FleetRequest {
     let side: Int
+    let lane: ArrivalLane
     var countdown: Float
+}
+
+struct ArrivalLane {
+    let origin: V3
+    let forward: V3
 }
 
 func requestedFactions() -> [Faction]? {

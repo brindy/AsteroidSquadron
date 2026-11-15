@@ -87,7 +87,7 @@ final class Carrier {
     var blinkExited = false
     var arrivalDuration: Float { faction.usesJumpWindow ? 2.1 : (faction.usesBlinkFTL ? 0.85 : 1.4) }
     var cameraBounds: V3 {
-        switch faction { case .colonial: return V3(82,30,136); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(73,36,145); case .goauld: return V3(129,68,120); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
+        switch faction { case .colonial: return V3(82,30,136); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(79,49,160); case .goauld: return V3(129,68,120); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
     }
     // The Imperial bridge is above the hull. Centering its exclusion volume at
     // the origin incorrectly blocked empty space beneath the launch bay.
@@ -103,9 +103,11 @@ final class Carrier {
                     (V3(0,0,48),V3(41,25,89)),
                     (pod,V3(21,20,76)),(V3(-pod.x,pod.y,pod.z),V3(21,20,76))]
         case .tauri:
-            return [(V3(0,2,-4),V3(34,32,140)),
-                    (V3(-51,-5,-7),V3(18,12,80)),
-                    (V3(51,-5,-7),V3(18,12,80))]
+            let pod = V3(Daedalus.podX,Daedalus.hangarY+1,17)
+            return [(V3(0,0,-82),V3(29,16,82)),
+                    (V3(0,9,56),V3(40,28,85)),
+                    (V3(0,29,38),V3(19,23,35)),
+                    (pod,V3(24,17,82)),(V3(-pod.x,pod.y,pod.z),V3(24,17,82))]
         case .goauld:
             return [(V3(0,-20,0),V3(83,88,83)),
                     (V3(0,7,0),V3(129,28,120))]
@@ -168,7 +170,7 @@ final class Carrier {
         case .shadow: port = V3(sign*22,-32,-56)
         case .earth: port = portalOnly ? V3(sign*(4+Float(slot/2)*3),Float(slot%3-1)*3,0) : V3(sign*13,-5,-132)
         case .rebel: port = V3(sign*24,-16,-46)
-        case .tauri: port = V3(sign*51,-6,-87)
+        case .tauri: port = Daedalus.launchPort(side:sign)
         case .goauld: port = HaTak.launchPort(side:sign)
         case .wraith: port = V3(sign*wraithHangarMouth.x,wraithHangarMouth.y,wraithHangarMouth.z-1)
         case .empire:

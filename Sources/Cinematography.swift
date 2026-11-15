@@ -500,7 +500,8 @@ final class CinematicDirector {
         let focusVelocity = mix(hero.active ? hero.velocity : .zero,groupVelocity,pull)
         let forwardOffset: Float = ship.faction == .shadow ? 30 : 58
         let lateralOffset: Float = ship.faction == .shadow ? 70 : 38
-        let elevation: Float = ship.faction == .goauld ? -18+pull*45 : -18
+        let revealFromAbove = ship.faction == .goauld || ship.faction == .tauri
+        let elevation = -18+(revealFromAbove ? pull*45 : 0)
         let offset: V3 = ship.forward*forwardOffset-right*lateralOffset+up*elevation
         let outward = unit(offset)
         let screenRight = unit(simd_cross(-outward,V3(0,1,0)))

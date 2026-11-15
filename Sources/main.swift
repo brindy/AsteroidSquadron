@@ -195,6 +195,7 @@ final class Fighter {
     var aceEligible: Bool { active && encountersSurvived>=3 && enemyKills>=6 }
     let aceBadge = AceBadge()
     var patrolRoute: [V3] = []
+    var victoryWaypoint: V3?
     var atlantisEgress: V3?
     var steeringDirection = V3(0,0,-1)
     var aimDirection = V3(0,0,-1)
@@ -260,6 +261,7 @@ final class Fighter {
         for child in node.childNodes { child.removeFromParentNode() }
         faction = replacement; generation += 1
         encountersSurvived = 0; enemyKills = 0; isAce = false; aceBadge.reset(); patrolRoute.removeAll(); atlantisEgress = nil
+        victoryWaypoint = nil
         let model = replacement.fighterModel()
         engines = FighterEngines(model:model)
         driveThrust = 0.45
