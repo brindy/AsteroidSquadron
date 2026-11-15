@@ -102,6 +102,10 @@ final class Carrier {
             return [(V3(0,0,-76),V3(45,26,67)),
                     (V3(0,0,48),V3(41,25,89)),
                     (pod,V3(21,20,76)),(V3(-pod.x,pod.y,pod.z),V3(21,20,76))]
+        case .cylon:
+            let bay = V3(Basestar.hangarX,Basestar.hangarY,Basestar.hangarMouth+13)
+            return [(.zero,V3(158,30,158)),
+                    (bay,V3(15,10,17)),(V3(-bay.x,bay.y,bay.z),V3(15,10,17))]
         case .tauri:
             let pod = V3(Daedalus.podX,Daedalus.hangarY+1,17)
             return [(V3(0,0,-82),V3(29,16,82)),
@@ -166,7 +170,7 @@ final class Carrier {
         let port: V3
         switch faction {
         case .colonial: port = GalacticaFlightPod.launchPort(side:sign)
-        case .cylon: port = V3(sign*20,-34,-30)
+        case .cylon: port = Basestar.launchPort(side:sign)
         case .shadow: port = V3(sign*22,-32,-56)
         case .earth: port = portalOnly ? V3(sign*(4+Float(slot/2)*3),Float(slot%3-1)*3,0) : V3(sign*13,-5,-132)
         case .rebel: port = V3(sign*24,-16,-46)

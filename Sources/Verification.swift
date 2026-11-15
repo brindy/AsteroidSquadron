@@ -849,31 +849,31 @@ private func verifyBlinkCarriers() {
         for f in b.fighters where f.side == 0 { b.destroy(f) }
         b.deployReinforcements(side:0)
         let ship = b.carriers[0]
-        if faction == .colonial {
-            // Probe across the deck, including the Viper's swept envelope.
-            // A capped mouth or an outrigger piercing the liner fails this check.
-            let scene = SCNScene()
-            let model = battlestarGalactica()
-            scene.rootNode.addChildNode(model)
-            // SceneKit populates its hit-test geometry after the first frame.
-            let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)
-            renderer.scene = scene
-            _ = renderer.snapshot(atTime:0,with:CGSize(width:32,height:32),antialiasingMode:.none)
-            let options = [SCNHitTestOption.backFaceCulling.rawValue:false]
-            for slot in 0..<2 {
-                let launch = ship.launchPosition(slot:slot,at:2.5)
-                let local = ship.node.simdOrientation.inverse.act(launch-ship.origin)/ship.scale
-                let wall = SCNVector3(local+V3(0,6,5))
-                check(!model.hitTestWithSegment(from:SCNVector3(local+V3(0,6,-16)),to:wall,
-                                                options:options).isEmpty,"Segment test did not detect Galactica's launch rim")
-                for x: Float in [-9,-3.9,0,3.9,9] { for y: Float in [-0.5,0,2.8] {
-                    let start = V3(local.x+x,local.y+y,GalacticaFlightPod.rear+4)
-                    let end = local+V3(x,y,-20)
-                    check(model.hitTestWithSegment(from:SCNVector3(start),to:SCNVector3(end),
-                                                   options:options).isEmpty,
-                          "Galactica's flight pod obstructed a Viper launch")
-                } }
-            }
+        // Probe the swept fighter envelope against the actual rendered mesh.
+        let scene = SCNScene()
+        let model = faction.capitalModel()
+        scene.rootNode.addChildNode(model)
+        let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)
+        renderer.scene = scene
+        // SceneKit populates its hit-test geometry after the first frame.
+        _ = renderer.snapshot(atTime:0,with:CGSize(width:32,height:32),antialiasingMode:.none)
+        let options = [SCNHitTestOption.backFaceCulling.rawValue:false]
+        let viper = faction == .colonial
+        let offsetsX: [Float] = viper ? [-9,-3.9,0,3.9,9] : [-6.5,0,6.5]
+        let offsetsY: [Float] = viper ? [-0.5,0,2.8] : [-0.9,0,1.25]
+        for slot in 0..<2 {
+            let launch = ship.launchPosition(slot:slot,at:2.5)
+            let local = ship.node.simdOrientation.inverse.act(launch-ship.origin)/ship.scale
+            let wall = SCNVector3(local+V3(0,6,5))
+            check(!model.hitTestWithSegment(from:SCNVector3(local+V3(0,6,-16)),to:wall,
+                                            options:options).isEmpty,"Segment test did not detect \(faction)'s launch rim")
+            for x in offsetsX { for y in offsetsY {
+                let start = V3(local.x+x,local.y+y,viper ? GalacticaFlightPod.rear+4 : local.z+21)
+                let end = local+V3(x,y,-45)
+                check(model.hitTestWithSegment(from:SCNVector3(start),to:SCNVector3(end),
+                                               options:options).isEmpty,
+                      "\(faction) hangar or hull obstructed a fighter launch")
+            } }
         }
         for _ in 0..<390 {
             for f in b.fighters { f.cooldown = 10000; f.collisionCooldown = 10000 }
@@ -1098,6 +1098,14 @@ func renderReview(directory: URL) {
             camera.simdPosition = V3(-69,77,-325)
             camera.look(at:SCNVector3(0,0,-10))
             save("hatak-reference-angle",at:0)
+            camera.camera!.fieldOfView = previousFOV
+        }
+        if name == "basestar" {
+            let previousFOV = camera.camera!.fieldOfView
+            camera.camera!.fieldOfView = 44
+            camera.simdPosition = V3(-170,-120,-201)
+            camera.look(at:SCNVector3(0,-4,-15))
+            save("basestar-underside",at:0)
             camera.camera!.fieldOfView = previousFOV
         }
         if name == "daedalus" {

@@ -39,48 +39,22 @@ _surface.diffuse.rgb *= mix(0.90,panels,detail)+(grain-0.5)*0.14*(1.0-smoothstep
 _surface.roughness = mix(0.68,0.86,panels);
 """
 
-private func daedalusRing(_ z: Float, width: Float, roof: Float, floor: Float) -> [V3] {
-    [V3(width*0.76,roof,z),V3(width,roof*0.53,z),V3(width,floor*0.47,z),V3(width*0.76,floor,z),
-     V3(-width*0.76,floor,z),V3(-width,floor*0.47,z),V3(-width,roof*0.53,z),V3(-width*0.76,roof,z)]
-}
-
-// The collar bridges the shell and liner without capping the mouth.
-private func daedalusSleeve(_ rings: [[V3]], material: SCNMaterial, inward: Bool = false) -> SCNNode {
-    var vertices: [SCNVector3] = []
-    var normals: [SCNVector3] = []
-    for (a,b) in zip(rings,rings.dropFirst()) {
-        for i in a.indices {
-            let j = (i+1)%a.count
-            for face in [[a[i],b[i],b[j]],[a[i],b[j],a[j]]] {
-                let triangle = inward ? Array(face.reversed()) : face
-                let normal = unit(simd_cross(triangle[1]-triangle[0],triangle[2]-triangle[0]))
-                vertices.append(contentsOf:triangle.map(SCNVector3.init))
-                normals.append(contentsOf:Array(repeating:SCNVector3(normal),count:3))
-            }
-        }
-    }
-    let geometry = SCNGeometry(
-        sources:[SCNGeometrySource(vertices:vertices),SCNGeometrySource(normals:normals)],
-        elements:[SCNGeometryElement(indices:Array(0..<Int32(vertices.count)),primitiveType:.triangles)])
-    return node(geometry,material)
-}
-
 private func daedalusPod(armor: SCNMaterial, plate: SCNMaterial, recess: SCNMaterial,
                          lights: SCNMaterial, caution: SCNMaterial) -> SCNNode {
     let pod = SCNNode()
     let mouth = Daedalus.hangarMouth
-    let exterior = [daedalusRing(mouth, width:14,roof:9.3,floor:-8.3),
-                    daedalusRing(-48,width:18.8,roof:13,floor:-10),
-                    daedalusRing(-30,width:21,roof:15,floor:-12),
-                    daedalusRing(34,width:21,roof:15,floor:-12),
-                    daedalusRing(71,width:19,roof:12.5,floor:-10.5),
-                    daedalusRing(91,width:14,roof:8.7,floor:-8)]
-    let interior = [daedalusRing(mouth,width:11.8,roof:5.7,floor:-5.6),
-                    daedalusRing(mouth+7,width:11.1,roof:5.25,floor:-5.25),
-                    daedalusRing(12,width:11.1,roof:5.25,floor:-5.25)]
-    pod.addChildNode(daedalusSleeve(exterior,material:armor))
-    pod.addChildNode(daedalusSleeve(interior,material:recess,inward:true))
-    pod.addChildNode(daedalusSleeve([interior[0],exterior[0]],material:plate))
+    let exterior = [armoredHullRing(mouth, width:14,roof:9.3,floor:-8.3),
+                    armoredHullRing(-48,width:18.8,roof:13,floor:-10),
+                    armoredHullRing(-30,width:21,roof:15,floor:-12),
+                    armoredHullRing(34,width:21,roof:15,floor:-12),
+                    armoredHullRing(71,width:19,roof:12.5,floor:-10.5),
+                    armoredHullRing(91,width:14,roof:8.7,floor:-8)]
+    let interior = [armoredHullRing(mouth,width:11.8,roof:5.7,floor:-5.6),
+                    armoredHullRing(mouth+7,width:11.1,roof:5.25,floor:-5.25),
+                    armoredHullRing(12,width:11.1,roof:5.25,floor:-5.25)]
+    pod.addChildNode(armoredSleeve(exterior,material:armor))
+    pod.addChildNode(armoredSleeve(interior,material:recess,inward:true))
+    pod.addChildNode(armoredSleeve([interior[0],exterior[0]],material:plate))
     let stern = exterior[exterior.count-1]
     pod.addChildNode(hullMesh(Array(stern.reversed()),faces:[Array(stern.indices)],mat:recess))
     pod.addChildNode(box(V3(22,10.4,1.8),recess,V3(0,0,12)))
@@ -89,11 +63,11 @@ private func daedalusPod(armor: SCNMaterial, plate: SCNMaterial, recess: SCNMate
 
     let fittings = SCNNode()
     for z in stride(from:mouth+10,through:6,by:8) {
-        let rib = [daedalusRing(z-0.44,width:11.15,roof:5.3,floor:-5.3),
-                   daedalusRing(z-0.22,width:10.55,roof:4.87,floor:-4.99),
-                   daedalusRing(z+0.22,width:10.55,roof:4.87,floor:-4.99),
-                   daedalusRing(z+0.44,width:11.15,roof:5.3,floor:-5.3)]
-        pod.addChildNode(daedalusSleeve(rib,material:plate,inward:true))
+        let rib = [armoredHullRing(z-0.44,width:11.15,roof:5.3,floor:-5.3),
+                   armoredHullRing(z-0.22,width:10.55,roof:4.87,floor:-4.99),
+                   armoredHullRing(z+0.22,width:10.55,roof:4.87,floor:-4.99),
+                   armoredHullRing(z+0.44,width:11.15,roof:5.3,floor:-5.3)]
+        pod.addChildNode(armoredSleeve(rib,material:plate,inward:true))
     }
     for side: Float in [-1,1] {
         fittings.addChildNode(box(V3(0.34,0.09,65),plate,V3(side*6.65,-5.12,-19)))

@@ -41,6 +41,32 @@ func armoredLoft(_ sections: [(Float,Float,Float,Float)], mat: SCNMaterial) -> S
     return node(geometry,mat)
 }
 
+func armoredHullRing(_ z: Float, width: Float, roof: Float, floor: Float) -> [V3] {
+    [V3(width*0.76,roof,z),V3(width,roof*0.53,z),V3(width,floor*0.47,z),V3(width*0.76,floor,z),
+     V3(-width*0.76,floor,z),V3(-width,floor*0.47,z),V3(-width,roof*0.53,z),V3(-width*0.76,roof,z)]
+}
+
+// The collar bridges the shell and liner without capping the mouth.
+func armoredSleeve(_ rings: [[V3]], material: SCNMaterial, inward: Bool = false) -> SCNNode {
+    var vertices: [SCNVector3] = []
+    var normals: [SCNVector3] = []
+    for (a,b) in zip(rings,rings.dropFirst()) {
+        for i in a.indices {
+            let j = (i+1)%a.count
+            for face in [[a[i],b[i],b[j]],[a[i],b[j],a[j]]] {
+                let triangle = inward ? Array(face.reversed()) : face
+                let normal = unit(simd_cross(triangle[1]-triangle[0],triangle[2]-triangle[0]))
+                vertices.append(contentsOf:triangle.map(SCNVector3.init))
+                normals.append(contentsOf:Array(repeating:SCNVector3(normal),count:3))
+            }
+        }
+    }
+    let geometry = SCNGeometry(
+        sources:[SCNGeometrySource(vertices:vertices),SCNGeometrySource(normals:normals)],
+        elements:[SCNGeometryElement(indices:Array(0..<Int32(vertices.count)),primitiveType:.triangles)])
+    return node(geometry,material)
+}
+
 private func raiderWing(sign: Float, mat: SCNMaterial) -> SCNNode {
     let spans = 24, chords = 8, row = chords+1
     let layer = (spans+1)*row
@@ -161,48 +187,6 @@ func cylonRaider() -> SCNNode {
         addMuzzle(to:root,at:V3(s*2.5,-0.2,-1.88),name:"\(s)")
         root.addChildNode(cylinder(0.2,0.1,material(color(0.4,0.6,1),emission:color(0.35,0.7,1.4)),V3(s*1.6,-0.18,1.8)))
         root.addChildNode(EngineNozzle(at:V3(s*1.6,-0.18,1.85),radius:0.20,tint:V3(0.36,0.56,1)))
-    }
-    return root
-}
-
-func cylonBasestar() -> SCNNode {
-    let root = SCNNode()
-    let metal = material(color(0.37,0.4,0.42),metal:0.85)
-    let edge = material(color(0.53,0.55,0.55),metal:0.75)
-    let dark = material(color(0.11,0.13,0.15),metal:0.6)
-    let red = material(color(0.55,0.025,0.01),emission:color(0.9,0.025,0.008))
-    let core = node(SCNSphere(radius:1),metal)
-    core.simdScale = V3(28,23,28); root.addChildNode(core)
-    for tier: Float in [-1,1] {
-        let level = SCNNode()
-        level.simdEulerAngles.y = tier<0 ? .pi/3 : 0
-        for arm in 0..<3 {
-            let branch = SCNNode(); branch.simdEulerAngles.y = Float(arm)*tau/3
-            let sections: [(Float,Float,Float,Float)] = [(-12,18,5,tier*12),(-50,20,5,tier*19),(-110,8,3,tier*22),(-143,1,1,tier*17)]
-            branch.addChildNode(armoredLoft(sections,mat:metal))
-            func surface(_ z: Float,_ widthFraction: Float) -> V3 {
-                for i in 0..<(sections.count-1) {
-                    let a = sections[i], b = sections[i+1]
-                    if z<=a.0 && z>=b.0 {
-                        let t = (z-a.0)/(b.0-a.0)
-                        return V3((a.1+(b.1-a.1)*t)*widthFraction,a.3+(b.3-a.3)*t+a.2+(b.2-a.2)*t+0.2,z)
-                    }
-                }
-                return V3(0,tier*12+6,z)
-            }
-            for s: Float in [-1,1] {
-                for i in 0..<(sections.count-1) {
-                    branch.addChildNode(segment(surface(sections[i].0,s*0.6),surface(sections[i+1].0,s*0.6),radius:0.3,mat:edge))
-                }
-                for i in 0..<9 {
-                    let z = -25-Float(i)*11
-                    branch.addChildNode(segment(surface(z,s*0.5),surface(z-6,s*0.25),radius:0.18,mat:dark))
-                }
-            }
-            branch.addChildNode(box(V3(2,0.5,3),red,surface(-27,0)))
-            level.addChildNode(branch)
-        }
-        root.addChildNode(level)
     }
     return root
 }
