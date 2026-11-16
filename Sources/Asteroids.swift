@@ -166,12 +166,13 @@ if (stoneDetail>0.5) {
 }
 """
 
-func asteroidGeometry(seed: UInt64) -> SCNGeometry {
+func asteroidGeometry(seed: UInt64, lunar: Bool = false) -> SCNGeometry {
     var random = Random(state:seed)
     let shape = AsteroidShape(random:&random)
     let tint = CGFloat(random.range(0.24,0.42))
     let warmth = CGFloat(random.range(0,1))
-    let stone = material(color(tint+0.03*warmth,tint*(0.94-0.14*warmth),tint*(0.91-0.24*warmth)))
+    let base = lunar ? color(tint*0.97,tint*1.10,tint*1.21) : color(tint+0.03*warmth,tint*(0.94-0.14*warmth),tint*(0.91-0.24*warmth))
+    let stone = material(base)
     stone.roughness.contents = 0.9
     stone.shaderModifiers = [.surface:asteroidSurface]
     stone.setValue(SCNVector3(random.vector(21)),forKey:"stoneOffset")

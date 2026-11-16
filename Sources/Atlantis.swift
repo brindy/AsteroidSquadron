@@ -304,7 +304,7 @@ extension Dogfight {
     private func startAtlantisSiege(attackingSide: Int) {
         // Stage off to one side of the planet-facing gap so later fighter
         // deployments can still use the lanes on either side of the sightline.
-        let towardPlanet = unit(V3(planetPosition.x,0,planetPosition.z))
+        let towardPlanet = unit(V3(landmarkPosition.x,0,landmarkPosition.z))
         let angle = rng.range(0.99,1.13)
         let direction = simd_quatf(angle:angle,axis:V3(0,1,0)).act(towardPlanet)
         let station = direction*2850+V3(0,530,0)
@@ -424,8 +424,10 @@ extension Dogfight {
         returningFromAtlantis = false
         atlantisRegroupUntil = nil
         atlantisAttackingSide = nil
-        refillVeteranSquadron(side:side)
-        queueFactionReplacement(for:1-side)
+        if !scheduleSectorDeparture(for:side) {
+            refillVeteranSquadron(side:side)
+            queueFactionReplacement(for:1-side)
+        }
     }
 
     private func updateAtlantisDestruction(_ city: Atlantis, age: Float, dt: Float) {

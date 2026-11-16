@@ -369,10 +369,10 @@ private func verifyPlanetaryReveals() {
             b.deployReinforcements(side:side)
             let ship = b.carriers.first
             let origin = ship?.origin ?? b.director.arrivalFlight!.origin
-            let planetDirection = unit(b.planetPosition)
+            let planetDirection = unit(b.landmarkPosition)
             let beltEdge = b.rocks.map { simd_length($0.position)+$0.radius }.max()!
             let depth = simd_dot(origin,planetDirection)
-            check(depth>beltEdge && depth<simd_length(b.planetPosition)-b.planetRadius,
+            check(depth>beltEdge && depth<simd_length(b.landmarkPosition)-b.landmarkRadius,
                   "\(faction) arrived outside the planet-facing gap")
             for f in b.fighters where f.side == side {
                 let end = f.entryPosition+f.entryForward*f.entrySpeed*f.formationHold
@@ -392,7 +392,7 @@ private func verifyPlanetaryReveals() {
             let points = ship.map { carrier in
                 carrier.framingPoints.map { carrier.origin+carrier.node.simdOrientation.act($0*carrier.scale) }
             } ?? b.fighters.filter { $0.side == side }.map(\.position)
-            check(points.allSatisfy(framed) && framed(b.planetPosition),
+            check(points.allSatisfy(framed) && framed(b.landmarkPosition),
                   "\(faction) reveal lost the arriving ships or the planet at aspect \(aspect)")
             if faction.usesBlinkFTL || faction == .rebel {
                 check(wide-tight>7,"\(faction) reveal did not tighten its lens in response to arrival")
@@ -507,13 +507,13 @@ private func verifyArrivalHandoff() {
 
 func verifyCinematicOptics(renderDirectory: URL? = nil) {
     let b = Dogfight(seed:7304,initialFactions:[.rebel,.empire],initialArrivals:false,firstAtlantisEncounter:nil)
-    let planetDirection = unit(b.planetPosition)
+    let planetDirection = unit(b.landmarkPosition)
     let lateral = unit(simd_cross(planetDirection,V3(0,1,0)))
-    let start = b.planetPosition
+    let start = b.landmarkPosition
     let far = start-lateral*2000
     let angularShift = acos(max(-1,min(1,simd_dot(unit(start),unit(far)))))
-    let a = asin(b.planetRadius/simd_length(start))
-    let c = asin(b.planetRadius/simd_length(far))
+    let a = asin(b.landmarkRadius/simd_length(start))
+    let c = asin(b.landmarkRadius/simd_length(far))
     check(angularShift<0.04 && abs(c/a-1)<0.025,"The planet has local-scale motion parallax")
     check(sin(a)>0.19,"The distant planet lost its epic angular size")
     let hero = b.fighters[0]

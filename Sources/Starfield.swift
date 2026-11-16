@@ -138,6 +138,7 @@ extension Dogfight {
         // the full 4096x2048 sky. Both use the same directional density function.
         let diagnostic = CommandLine.arguments.contains { $0.hasPrefix("--verify") || $0 == "--combat-benchmark" }
             && !CommandLine.arguments.contains("--render-stargate-review")
+            && !CommandLine.arguments.contains("--render-sector-review")
         scene.background.contents = ProceduralStarfield(seed:seed).image(width:diagnostic ? 128 : 4096)
         scene.background.intensity = 1
         scene.background.minificationFilter = .linear

@@ -83,7 +83,10 @@ extension Dogfight {
         let boost = max(0,min(1,(radial-650)/800))
         var speed = f.cruiseSpeed+(215-f.cruiseSpeed)*boost*boost*(3-2*boost)
         var goal: V3
-        if let city = atlantis, city.intact {
+        if let departure = sectorDeparture, f.side == departure.side {
+            goal = departure.destination(for:f)
+            speed = max(160,speed)
+        } else if let city = atlantis, city.intact {
             goal = atlantisDestination(for:f,city:city,speed:&speed)
             f.victoryWaypoint = nil
             f.pursuitDeadline = 0

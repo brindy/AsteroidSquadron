@@ -27,9 +27,15 @@ extension Dogfight {
 
     func requestReplacement(for side: Int) {
         let roster = fighters.filter { $0.side == side }
-        guard atlantisAttackingSide == nil, !pendingSides.contains(side), roster.allSatisfy({$0.state == .destroyed}),
+        guard atlantisAttackingSide == nil, sectorDeparture == nil, !pendingSides.contains(side), roster.allSatisfy({$0.state == .destroyed}),
               !carriers.contains(where:{$0.side == side}) else { return }
         let winner = 1-side
+        if let limit = sectorWaveLimit, encountersCompleted+1>=limit, sideCount(winner)>0 {
+            guard carriers.isEmpty, arrivingCount == 0 else { return }
+            creditEncounter(survivingSides:[winner],replenish:false)
+            scheduleSectorDeparture(for:winner)
+            return
+        }
         if let next = nextAtlantisEncounter, sideCount(winner)>0, encountersCompleted+1>=next {
             creditEncounter(survivingSides:[winner],replenish:false)
             atlantisAttackingSide = winner
@@ -61,7 +67,7 @@ extension Dogfight {
     }
 
     func updateReinforcements(_ dt: Float) {
-        guard !returningFromAtlantis else { return }
+        guard !returningFromAtlantis, sectorDeparture == nil else { return }
         if let side = atlantisAttackingSide {
             // If Atlantis wipes out the assault wave, only its original
             // opponent can return. The empty rival side stays out of play.
@@ -73,7 +79,7 @@ extension Dogfight {
         }
         // Only defeated factions rotate. Veteran top-ups are staged before their next opponent.
         for side in 0..<2 { requestReplacement(for:side) }
-        guard atlantisAttackingSide == nil else { return }
+        guard atlantisAttackingSide == nil, sectorDeparture == nil else { return }
         for i in fleetRequests.indices.reversed() {
             fleetRequests[i].countdown -= dt
             if fleetRequests[i].countdown<=0 {
@@ -91,7 +97,7 @@ extension Dogfight {
     }
 
     private func arrivalLane(for faction: Faction, side: Int) -> ArrivalLane {
-        let radial = unit(V3(planetPosition.x,0,planetPosition.z))
+        let radial = unit(V3(landmarkPosition.x,0,landmarkPosition.z))
         let tangent = unit(simd_cross(radial,V3(0,1,0)))
         // The two fleets stage on opposite sides of the sightline to the planet.
         let sign: Float = side == 0 ? -1 : 1
@@ -108,7 +114,7 @@ extension Dogfight {
         default: (distance,offset,course) = (2340,450,1.2)
         }
         let origin = radial*distance+tangent*(sign*(offset+rng.range(-50,50)))
-            + V3(0,unit(planetPosition).y*1500+rng.range(120,200),0)
+            + V3(0,unit(landmarkPosition).y*1500+rng.range(120,200),0)
         let forward = unit(-radial-tangent*course)
         return ArrivalLane(origin:origin,forward:forward)
     }

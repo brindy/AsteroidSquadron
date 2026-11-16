@@ -9,7 +9,7 @@ enum PlanetBiome: Int, CaseIterable {
 }
 
 // Noise is evaluated on the sphere itself: no image downloads, UV seam, or polar stretch.
-private let planetNoise = """
+let planetNoise = """
 float planetHash(float3 p) {
     p = fract(p*0.1031);
     p += dot(p,p.yzx+33.33);

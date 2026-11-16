@@ -325,13 +325,13 @@ final class CinematicDirector {
             var best = -Float.infinity
             // Establish from an open side of the asteroid cluster so the hulls
             // are readable instead of hidden behind a foreground boulder.
-            let planetDirection = unit(V3(center.x-b.planetPosition.x,0,center.z-b.planetPosition.z))
+            let landmarkDirection = unit(V3(center.x-b.landmarkPosition.x,0,center.z-b.landmarkPosition.z))
             let count = b.automatic ? 19 : 16
             for step in 0..<count {
                 let a = b.time*0.026+Float(step%8)*tau/8
                 let elevation: Float = step<8 ? 0.65 : 1.5
                 let direction = step<16 ? unit(b.arenaRotation.act(V3(sin(a)*0.8,elevation,cos(a)*0.8)))
-                    : unit(planetDirection+V3(0,Float(step-17)*0.17,0))
+                    : unit(landmarkDirection+V3(0,Float(step-17)*0.17,0))
                 let point = center+direction*distance
                 let visible = group.reduce(Float(0)) { total,f in
                     let blocked = b.rocks.contains { sphereImpact(from:point,to:f.position,center:$0.position,radius:$0.radius) != nil }
@@ -344,8 +344,8 @@ final class CinematicDirector {
                     guard simd_dot(offset,view)>0, d<distance*1.2, simd_dot(unit(offset),view)>0.6 else { return total }
                     return total+min(3,rock.radius*rock.radius/max(1,d*d)*30)
                 }
-                let planetAngle = simd_dot(unit(b.planetPosition-point),view)
-                let backdrop: Float = step>=16 && planetAngle>0.95 ? 0.65 : 0
+                let landmarkAngle = simd_dot(unit(b.landmarkPosition-point),view)
+                let backdrop: Float = step>=16 && landmarkAngle>0.95 ? 0.65 : 0
                 let score = visible-foreground+backdrop
                 if score>best { best = score; overviewDirection = direction }
             }
@@ -363,34 +363,35 @@ final class CinematicDirector {
         value = target+(offset+temp)*e
     }
 
-    private func planetaryReveal(origin: V3, subject: V3, points: [V3], distance: Float,
+    private func landmarkReveal(origin: V3, subject: V3, points: [V3], distance: Float,
                                  age: Float, cue: Float, elevation: Float = 0.24,
                                  approach: V3? = nil, in b: Dogfight)
         -> (position: V3, look: V3, fov: Float, roll: Float) {
         let up = V3(0,1,0)
-        let outward = unit(b.planetPosition-origin)
+        let outward = unit(b.landmarkPosition-origin)
         let right = unit(simd_cross(outward,up))
         let lateral = simd_dot(approach ?? origin,right)>0 ? -right : right
         let lateralOffset: Float = approach == nil ? 0.32 : 0.92
         let range = distance/max(0.58,min(1,b.viewportAspect))
         let position = origin+range*(-outward+lateral*lateralOffset+up*elevation)-lateral*distance*0.028*age
         let shipSightline = unit(subject-position)
-        let planetSightline = unit(b.planetPosition-position)
+        let landmarkSightline = unit(b.landmarkPosition-position)
         // The operator holds the wide frame until the jump, pans a beat late,
         // then briefly overshoots before settling on the arriving ship.
         let reaction = max(0,age-cue-0.08)
         let zoom = 1-exp(-reaction*reaction*52)
         let correction = sin(reaction*15)*exp(-reaction*6)
-        let aim = unit(mix(shipSightline,planetSightline,0.43-zoom*0.14)
+        let aim = unit(mix(shipSightline,landmarkSightline,0.43-zoom*0.14)
                        + lateral*correction*0.04+up*correction*0.025)
         let roll = correction*0.037
         let screenRight = simd_quatf(angle:roll,axis:aim).act(unit(simd_cross(aim,up)))
         let screenUp = simd_cross(screenRight,aim)
         // Allow the limb to extend beyond frame while keeping the hull, gate,
-        // and enough of the planet's disc to read as three separate depths.
-        let radius = b.planetRadius*0.68
-        let backdrop = [b.planetPosition+screenUp*radius,b.planetPosition-screenUp*radius,
-                        b.planetPosition+screenRight*radius,b.planetPosition-screenRight*radius]
+        // and enough of the landmark to read as three separate depths.
+        let radius = b.landmarkRadius*0.68
+        let height = b.landmark == .babylon5 ? radius*0.56 : radius
+        let backdrop = [b.landmarkPosition+screenUp*height,b.landmarkPosition-screenUp*height,
+                        b.landmarkPosition+screenRight*radius,b.landmarkPosition-screenRight*radius]
         let tangent = (points+backdrop).reduce(Float(0)) { extent,point in
             let delta = point-position
             let depth = max(1,simd_dot(delta,aim))
@@ -424,7 +425,7 @@ final class CinematicDirector {
             cue = ship.arrivalDuration*0.65
         }
         let elevation: Float = ship.faction == .shadow ? -0.25 : 0.24
-        return planetaryReveal(origin:ship.origin,subject:subject,points:points,distance:distance,
+        return landmarkReveal(origin:ship.origin,subject:subject,points:points,distance:distance,
                                age:age,cue:cue,elevation:elevation,
                                approach:ship.hyperspaceTrail == nil ? nil : ship.forward,in:b)
     }
@@ -438,7 +439,7 @@ final class CinematicDirector {
             let angle = Float(step)*tau/12
             points.append(city.position+V3(sin(angle),0,cos(angle))*shieldRadius)
         }
-        return planetaryReveal(origin:city.position,subject:city.position+up*72,points:points,
+        return landmarkReveal(origin:city.position,subject:city.position+up*72,points:points,
                                distance:1480,age:age,cue:Atlantis.revealDelay,
                                elevation:0.40+min(1,age/4.8)*0.20,in:b)
     }
@@ -550,13 +551,22 @@ final class CinematicDirector {
     func update(_ dt: Float, in b: Dogfight) {
         eventAge += dt; shake *= exp(-dt*8)
         if !b.automatic && event != .none { begin(.none,in:b) }
-        if b.automatic, b.atlantis?.assault?.finished != false, let flight = arrivalFlight,
+        let sectorShot = b.showingSector || b.sectorDeparture != nil
+        if sectorShot {
+            b.camera.camera!.wantsDepthOfField = false
+        } else if b.sectorEstablishingUntil>0 && b.time-dt<b.sectorEstablishingUntil {
+            b.camera.camera!.wantsDepthOfField = true
+            b.cut = true
+        }
+        if !sectorShot, b.automatic, b.atlantis?.assault?.finished != false, let flight = arrivalFlight,
            flight.start>coveredFlight, b.time>=flight.start, b.time-flight.start<1.1 {
             coveredFlight = flight.start; begin(.formation,in:b)
         }
         if event == .none && b.automatic && b.cameraIndex != 2 && b.cameraAge>shotLength { endEvent(in:b) }
-        considerAtlantisCoverage(in:b)
-        considerCriticalMoment(in:b)
+        if !sectorShot {
+            considerAtlantisCoverage(in:b)
+            considerCriticalMoment(in:b)
+        }
         let up = V3(0,1,0)
         var desired = b.cameraPosition, look = b.cameraLook
         var fov: Float = 51
@@ -565,7 +575,33 @@ final class CinematicDirector {
         var trackingFormation = false
         var focusPoint: V3?
         var aperture: Float = 3.6
-        if event == .formation, let flight = arrivalFlight {
+        if let flight = b.sectorDeparture {
+            let survivors = b.fighters.filter { $0.side == flight.side && $0.active }
+            let count = Float(max(1,survivors.count))
+            let groupCenter = survivors.isEmpty ? flight.origin+flight.heading*650 : survivors.reduce(V3.zero) { $0+$1.position }/count
+            let leader = b.fighters[flight.leader]
+            let lead = leader.active ? leader.position : (survivors.first?.position ?? groupCenter)
+            let weights = survivors.map { exp(-simd_distance_squared($0.position,lead)/(135*135)) }
+            let weight = max(0.001,weights.reduce(0,+))
+            let nearCenter = zip(survivors,weights).reduce(V3.zero) { $0+$1.0.position*$1.1 }/weight
+            let blend = survivors.isEmpty ? 0 : max(0,min(1,(b.time-flight.started-2.2)/2))
+            let center = mix(groupCenter,nearCenter,blend)
+            let spread = zip(survivors,weights).map {
+                simd_distance($0.0.position,center)*(1-blend+blend*$0.1)
+            }.max() ?? 0
+            let distance = min(900,max(74,spread*2.35))/max(0.65,min(1,b.viewportAspect))
+            let backdrop = unit(b.landmarkPosition)
+            desired = center-backdrop*(distance*0.76)-flight.heading*(distance*0.55)+up*(distance*0.23)
+            look = center+flight.heading*min(15,distance*0.09)
+            focusPoint = center; fov = 47; aperture = 5.6
+        } else if b.showingSector {
+            let outward = unit(b.landmarkPosition)
+            let right = unit(simd_cross(outward,up))
+            desired = -outward*1550+right*(240-b.time*136)+up*(590-b.time*48)
+            look = b.landmarkPosition
+            focusPoint = b.landmarkPosition
+            fov = max(43,43/max(0.72,min(1,b.viewportAspect))); aperture = 9
+        } else if event == .formation, let flight = arrivalFlight {
             let age = b.time-flight.start
             let right = unit(simd_cross(flight.forward,up))
             let closeAt: Float = 1.8
@@ -575,7 +611,7 @@ final class CinematicDirector {
                     return fighter.warp.isHidden ? [fighter.entryPosition] : [fighter.entryPosition,fighter.warp.point.simdPosition]
                 }
                 let anchor = flight.origin+flight.forward*max(0,age-1.25)*28
-                (desired,look,fov,roll) = planetaryReveal(origin:flight.origin,subject:anchor,points:points,
+                (desired,look,fov,roll) = landmarkReveal(origin:flight.origin,subject:anchor,points:points,
                     distance:285,age:age,cue:1.14,in:b)
                 focusPoint = anchor
                 revealingArrival = true

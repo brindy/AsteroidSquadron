@@ -157,7 +157,7 @@ func verifyStargate(renderDirectory: URL? = nil) {
     for f in b.fighters { f.cooldown = 0.2 }
     let city = b.atlantis!
     stargateCheck(simd_length(city.position)>2500,"Atlantis arrived inside the asteroid field")
-    stargateCheck(simd_dot(city.position,unit(b.planetPosition))>1000,"Atlantis did not arrive on the planet-facing side")
+    stargateCheck(simd_dot(city.position,unit(b.landmarkPosition))>1000,"Atlantis did not arrive on the planet-facing side")
     stargateCheck(!b.fireAtAtlantis(from:0,city:city),"A fighter fired at Atlantis from the asteroid field")
     stargateCheck(!b.fire(from:0,to:1),"A squadron broke the siege truce")
     var rendered = Set<String>()
@@ -266,7 +266,7 @@ func verifyStargate(renderDirectory: URL? = nil) {
         var shot: String?
         if event == .atlantisArrival && age>1.0 {
             let tangent = tan(Float(b.camera.camera!.fieldOfView)*Float.pi/360)
-            let planet = b.camera.simdConvertPosition(b.planetPosition,from:nil)
+            let planet = b.camera.simdConvertPosition(b.landmarkPosition,from:nil)
             let station = b.camera.simdConvertPosition(city.position,from:nil)
             stargateCheck(planet.z<station.z && abs(planet.y)<(-planet.z)*tangent &&
                           abs(planet.x)<(-planet.z)*tangent*b.viewportAspect,
