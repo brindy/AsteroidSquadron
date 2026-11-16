@@ -7,6 +7,32 @@ private func babylonCheck(_ condition: @autoclosure () -> Bool, _ message: Strin
     if !condition() { print("FAIL: \(message)"); fflush(stdout); exit(1) }
 }
 
+private func verifyShadowBays(_ ship: Carrier) {
+    let scene = SCNScene()
+    let model = shadowCapital()
+    scene.rootNode.addChildNode(model)
+    let renderer = SCNRenderer(device:MTLCreateSystemDefaultDevice(),options:nil)
+    renderer.scene = scene
+    _ = renderer.snapshot(atTime:0,with:CGSize(width:32,height:32),antialiasingMode:.none)
+    let options = [SCNHitTestOption.backFaceCulling.rawValue:false]
+    for slot in 0..<2 {
+        let launch = ship.launchPosition(slot:slot,at:2.5)
+        let hullPoint = ship.node.simdOrientation.inverse.act(launch-ship.origin)/ship.scale
+        func blocked(_ offset: V3) -> Bool {
+            let from = SCNVector3(hullPoint+offset+V3(0,0,23))
+            let to = SCNVector3(hullPoint+offset-V3(0,0,102))
+            return !model.hitTestWithSegment(from:from,to:to,options:options).isEmpty
+        }
+        babylonCheck(blocked(V3(0,6.9,0)),"The Shadow bay rim is missing from the collision probe")
+        for x: Float in [-6.3,0,6.3] {
+            for y: Float in [-3.4,0,3.85] {
+                babylonCheck(!blocked(V3(x,y,0)),"The Shadow hull intersects a fighter's launch path")
+            }
+        }
+    }
+    print("PASS: Both Shadow bays are open from the staging point past the spine tips.")
+}
+
 func verifyBabylon() {
     verifyJumpClipping()
     for faction in [Faction.earth,.shadow] {
@@ -15,6 +41,7 @@ func verifyBabylon() {
         for f in b.fighters where f.side == 0 { b.destroy(f) }
         b.deployReinforcements(side:0)
         let ship = b.carriers[0], window = ship.jumpWindow!
+        if faction == .shadow { verifyShadowBays(ship) }
         let nodes = b.scene.rootNode.childNodes.count
         var sawPortalFirst = false, sawDeparture = false, sawHandoff = false
         for _ in 0..<720 {
@@ -163,8 +190,25 @@ func renderBabylonReview(directory: URL) {
     for (name,model,scale) in [("starfury",starfury(),Float(1)),("shadow-fighter",shadowFighter(),1),("shadow-capital",shadowCapital(),25)] {
         scene.rootNode.addChildNode(model)
         for (i,p) in [V3(12,8,-18),V3(0,0,-23),V3(-14,7,17)].enumerated() {
-            camera.simdPosition = p*scale; camera.look(at:SCNVector3(0,0,0))
+            camera.simdPosition = p*scale
+            camera.look(at:SCNVector3Zero,up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
             save(name+"-\(i+1)",time:0)
+        }
+        if name == "shadow-fighter" {
+            camera.simdPosition = V3(-3.5,15.6,2.4)
+            camera.look(at:SCNVector3(0,0,0.55),up:SCNVector3(-1,0,0.4),localFront:SCNVector3(0,0,-1))
+            save("shadow-fighter-carapace",time:0)
+            camera.simdPosition = V3(14.8,3.9,-8.6)
+            camera.look(at:SCNVector3(0,0.25,0.6),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
+            save("shadow-fighter-profile",time:0)
+        }
+        if name == "shadow-capital" {
+            camera.simdPosition = V3(-125,160,-292)
+            camera.look(at:SCNVector3(0,0,-30),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
+            save("shadow-capital-roots",time:0)
+            camera.simdPosition = V3(-260,5,-225)
+            camera.look(at:SCNVector3(0,0,-35),up:SCNVector3(0,1,0),localFront:SCNVector3(0,0,-1))
+            save("shadow-capital-side",time:0)
         }
         model.removeFromParentNode()
     }

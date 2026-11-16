@@ -87,7 +87,7 @@ final class Carrier {
     var blinkExited = false
     var arrivalDuration: Float { faction.usesJumpWindow ? 2.1 : (faction.usesBlinkFTL ? 0.85 : 1.4) }
     var cameraBounds: V3 {
-        switch faction { case .colonial: return V3(82,30,136); case .cylon: return V3(158,30,158); case .shadow: return V3(180,24,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(79,49,160); case .goauld: return V3(129,68,120); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
+        switch faction { case .colonial: return V3(82,30,136); case .cylon: return V3(158,30,158); case .shadow: return V3(180,70,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(79,49,160); case .goauld: return V3(129,68,120); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
     }
     // The Imperial bridge is above the hull. Centering its exclusion volume at
     // the origin incorrectly blocked empty space beneath the launch bay.
@@ -106,6 +106,13 @@ final class Carrier {
             let bay = V3(Basestar.hangarX,Basestar.hangarY,Basestar.hangarMouth+13)
             return [(.zero,V3(158,30,158)),
                     (bay,V3(15,10,17)),(V3(-bay.x,bay.y,bay.z),V3(15,10,17))]
+        case .shadow:
+            let bay = V3(ShadowCarrier.bayX,ShadowCarrier.bayY,ShadowCarrier.bayMouth+16)
+            return [(.zero,V3(63,27,77))] + [-1,1].flatMap { (side: Float) in
+                [(V3(side*bay.x,bay.y,bay.z),V3(16,12,18)),
+                 (V3(side*105,29,-61),V3(71,43,115)),
+                 (V3(side*101,-30,-35),V3(72,44,86))]
+            }
         case .tauri:
             let pod = V3(Daedalus.podX,Daedalus.hangarY+1,17)
             return [(V3(0,0,-82),V3(29,16,82)),
@@ -171,7 +178,7 @@ final class Carrier {
         switch faction {
         case .colonial: port = GalacticaFlightPod.launchPort(side:sign)
         case .cylon: port = Basestar.launchPort(side:sign)
-        case .shadow: port = V3(sign*22,-32,-56)
+        case .shadow: port = ShadowCarrier.launchPort(side:sign)
         case .earth: port = portalOnly ? V3(sign*(4+Float(slot/2)*3),Float(slot%3-1)*3,0) : V3(sign*13,-5,-132)
         case .rebel: port = V3(sign*24,-16,-46)
         case .tauri: port = Daedalus.launchPort(side:sign)

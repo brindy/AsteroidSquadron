@@ -423,8 +423,10 @@ final class CinematicDirector {
             subject = mix(subject,trail.point.simdPosition,0.14)
             cue = ship.arrivalDuration*0.65
         }
+        let elevation: Float = ship.faction == .shadow ? -0.25 : 0.24
         return planetaryReveal(origin:ship.origin,subject:subject,points:points,distance:distance,
-                               age:age,cue:cue,approach:ship.hyperspaceTrail == nil ? nil : ship.forward,in:b)
+                               age:age,cue:cue,elevation:elevation,
+                               approach:ship.hyperspaceTrail == nil ? nil : ship.forward,in:b)
     }
 
     private func atlantisReveal(_ city: Atlantis, age: Float, in b: Dogfight)
