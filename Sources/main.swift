@@ -400,6 +400,7 @@ final class Dogfight {
     var landmarkRadius: Float = 440
     var planet: ProceduralPlanet?
     var babylonStation: BabylonStation?
+    var blackHoleBackdrop: BlackHoleBackdrop?
     var landmarkSunDirection = V3(0,0,1)
     var cameraAge: Float = 0
     var viewportAspect: Float = 1.6
@@ -450,7 +451,7 @@ final class Dogfight {
         scene.lightingEnvironment.intensity = 0.65
         camera.camera = SCNCamera()
         camera.camera!.zNear = 0.3
-        camera.camera!.zFar = 85000
+        camera.camera!.zFar = landmark == .ringworld ? 120000 : 85000
         camera.camera!.sensorHeight = 240
         camera.camera!.fieldOfView = 58
         camera.camera!.wantsDepthOfField = true
@@ -541,7 +542,9 @@ final class Dogfight {
                 r = rng.range(5,42)
             }
             if i < 2 { r = rng.range(20,29) }
-            let n = SCNNode(geometry:geometries[i%geometries.count])
+            let isWreck = landmark == .graveyard && i>=75 && i.isMultiple(of:13)
+            if isWreck { r = max(32,r) }
+            let n = isWreck ? wreckedHull(seed:seed &+ UInt64(i)*823) : SCNNode(geometry:geometries[i%geometries.count])
             n.simdScale = V3(r*rng.range(0.8,1.35),r*rng.range(0.7,1.2),r)
             n.simdEulerAngles = rng.vector(.pi)
             let bounds = max(n.simdScale.x,max(n.simdScale.y,n.simdScale.z))*1.25
@@ -558,7 +561,7 @@ final class Dogfight {
             }
             n.simdPosition = p
             scene.rootNode.addChildNode(n)
-            rocks.append(Rock(node:n,position:p,radius:bounds,spin:rng.vector(0.035)))
+            rocks.append(Rock(node:n,position:p,radius:bounds,spin:rng.vector(isWreck ? 0.010 : 0.035)))
         }
     }
     func makeLandmark() {
@@ -570,6 +573,11 @@ final class Dogfight {
         let angle = landmark == .planet ? variation : (variation<0 ? -1 : 1)*(0.83+abs(variation)*0.22)
         let a = atan2(-landmarkSunDirection.x,-landmarkSunDirection.z)+angle
         landmarkPosition = V3(sin(a)*4650,rng.range(210,1100),cos(a)*4650)*12
+        if landmark == .graveyard {
+            // Park the wrecks beyond incoming lanes while keeping perceptible parallax.
+            landmarkPosition *= 0.136
+            landmarkRadius *= 0.125
+        }
         let towardCamera = unit(-landmarkPosition)
         let model: SCNNode
         switch landmark {
@@ -588,6 +596,17 @@ final class Dogfight {
         case .deathStar:
             model = deathStar(towardCamera:towardCamera,sun:landmarkSunDirection)
             model.simdScale = V3(repeating:landmarkRadius*0.95)
+        case .ringworld:
+            model = ringworld(seed:seed,towardCamera:towardCamera,sun:landmarkSunDirection)
+            model.simdScale = V3(repeating:landmarkRadius*0.90)
+        case .blackHole:
+            let lens = BlackHoleBackdrop(towardCamera:towardCamera,sky:scene.background.contents)
+            blackHoleBackdrop = lens
+            model = lens.node
+            model.simdScale = V3(repeating:landmarkRadius*1.07)
+        case .graveyard:
+            model = fleetGraveyard(seed:seed,towardCamera:towardCamera,sun:landmarkSunDirection)
+            model.simdScale = V3(repeating:landmarkRadius*0.88)
         }
         model.name = "landmark.\(landmark.rawValue)"
         model.simdPosition = landmarkPosition
@@ -688,6 +707,7 @@ final class Dogfight {
         for cloud in clouds { cloud.update(time:time,camera:cameraPosition) }
         planet?.update(time:time)
         babylonStation?.update(time:time)
+        blackHoleBackdrop?.update(time:time)
     }
     func destroy(_ fighter: Fighter) {
         guard fighter.active else { return }
@@ -1351,7 +1371,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func showHelp() {
         let alert = NSAlert()
         alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nFlight → Pause When Unfocused   Pause automatically when the window loses focus\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nT          Wipe into the next sector immediately\nB          Generate the next biome in a planet sector\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. Every 10–20 completed waves, the victorious squadron returns to its fleet. The next sector has a fresh belt around a planet, shattered moon, Babylon 5, or the Death Star. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. A pilot needs three survived encounters, six enemy kills, and a kill count above the previous Ace record. The current Ace carries a gold star. The title can stay vacant until the record is beaten. Without opponents, pilots patrol through and around the belt. Both squadrons attack Atlantis when it appears beyond the field. After its destruction, surviving fighters return to the belt. The HUD records distinct Ace pilots and the longest completed-encounter survival streak across sectors, even after pilots return home. R resets these records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners."
+        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nFlight → Pause When Unfocused   Pause automatically when the window loses focus\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nT          Wipe into the next sector immediately\nB          Generate the next biome in a planet sector\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. Every 10–20 completed waves, the victorious squadron returns to its fleet. The next sector has a fresh belt around a planet, shattered moon, Babylon 5, the Death Star, a ringworld, a black hole, or a fleet graveyard. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. A pilot needs three survived encounters, six enemy kills, and a kill count above the previous Ace record. The current Ace carries a gold star. The title can stay vacant until the record is beaten. Without opponents, pilots patrol through and around the belt. Both squadrons attack Atlantis when it appears beyond the field. After its destruction, surviving fighters return to the belt. The HUD records distinct Ace pilots and the longest completed-encounter survival streak across sectors, even after pilots return home. R resets these records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. No audio or network.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners."
         alert.addButton(withTitle:"Back to the dogfight")
         alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
     }

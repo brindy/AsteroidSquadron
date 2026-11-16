@@ -4,6 +4,7 @@ import simd
 
 enum SectorLandmark: String, CaseIterable {
     case planet, shatteredMoon = "moon", babylon5 = "babylon5", deathStar = "deathstar"
+    case ringworld, blackHole = "blackhole", graveyard
 
     var title: String {
         switch self {
@@ -11,6 +12,9 @@ enum SectorLandmark: String, CaseIterable {
         case .shatteredMoon: return "SHATTERED MOON"
         case .babylon5: return "BABYLON 5"
         case .deathStar: return "DEATH STAR"
+        case .ringworld: return "RINGWORLD"
+        case .blackHole: return "BLACK HOLE"
+        case .graveyard: return "FLEET GRAVEYARD"
         }
     }
 }
@@ -34,7 +38,7 @@ struct SectorBackdrops {
 
 // The landmarks sit well beyond the arena fog. Shade them in local space so the
 // same directional key lights them as the fighters without losing their silhouettes.
-private func landmarkMaterial(_ base: NSColor, sun: V3, declarations: String = "", surface: String = "") -> SCNMaterial {
+func landmarkMaterial(_ base: NSColor, sun: V3, declarations: String = "", surface: String = "") -> SCNMaterial {
     let mat = material(base)
     mat.lightingModel = .constant
     mat.shaderModifiers = [.fragment:"""
@@ -58,7 +62,7 @@ private func landmarkMaterial(_ base: NSColor, sun: V3, declarations: String = "
     return mat
 }
 
-private func landmarkMesh(rows: Int, columns: Int, skin: SCNMaterial, flip: Bool = false,
+func landmarkMesh(rows: Int, columns: Int, skin: SCNMaterial, flip: Bool = false,
                           point: (Float,Float) -> V3) -> SCNNode {
     let stride = columns+1
     var vertices = [V3](), normals = [SCNVector3](), indices = [Int32]()

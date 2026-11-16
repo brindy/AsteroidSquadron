@@ -73,7 +73,11 @@ func verifySectors(renderDirectory: URL?) {
     requireSector(next.activeCount == 0 && next.carriers.allSatisfy { $0.node.isHidden },"Ships arrived during the establishing shot")
     while next.time<8 { next.update(dt:1.0/30) }
     requireSector(!next.showingSector && next.activeCount>0,"The next battle failed to start after the reveal")
-    print("PASS: All four landmarks rotate without repeats, victories respect the 10–20 wave limit, survivors leave before the wipe, and each new belt reveals before arrivals. Ace history and Atlantis timing carry over.")
+    print("PASS: All landmarks rotate without repeats, victories respect the 10–20 wave limit, survivors leave before the wipe, and each new belt reveals before arrivals. Ace history and Atlantis timing carry over.")
+    let yard = Dogfight(seed:823,initialArrivals:false,firstAtlantisEncounter:nil,landmark:.graveyard)
+    let wrecks = yard.rocks.filter { $0.node.name == "wreck.hull" }
+    requireSector(wrecks.count>8 && yard.rocks.count==245,"Fleet wrecks failed to replace asteroids as obstacles")
+    requireSector(wrecks.allSatisfy { $0.radius>=32 && $0.node.simdPosition == $0.position },"Wrecks are missing their navigation bounds")
     if let renderDirectory { renderSectors(directory:renderDirectory) }
 }
 
