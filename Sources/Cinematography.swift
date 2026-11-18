@@ -45,6 +45,11 @@ final class CinematicDirector {
     var explosionVelocity = V3.zero
     var explosionCamera = V3.zero
     var attackCuts = 0
+    private var cockpitShot: CockpitCameraShot?
+    private var nextCockpitTime: Float = 0
+    private(set) var cockpitCuts = 0
+    var cockpitFaction: Faction? { cockpitShot?.pilot.faction }
+    var cockpitActive: Bool { cockpitShot != nil }
     var explosionCuts = 0
     var shake: Float = 0
     var rng: Random
@@ -72,6 +77,8 @@ final class CinematicDirector {
     init(seed: UInt64) { rng = Random(state:seed ^ 0xC1AE_AA77) }
 
     func begin(_ newEvent: Event, in b: Dogfight) {
+        cockpitShot?.restore(in:b)
+        cockpitShot = nil
         event = newEvent; eventAge = 0; b.cut = true; b.wreckHold = 0
         switch newEvent {
         case .formation: caption = "SQUADRON INBOUND"; detail = "X-WING FORMATION / HYPERSPACE INSERTION"; formationCuts += 1
@@ -93,6 +100,15 @@ final class CinematicDirector {
             dangerCuts += 1
         case .attack:
             caption = "HOT PURSUIT"; detail = "CRITICAL ATTACK RUN / TARGET UNDER FIRE"; attackCuts += 1
+            // Keep exterior coverage between these brief pilot perspectives.
+            if attackCuts.isMultiple(of:2), b.time >= nextCockpitTime, let target = engagementTarget,
+               let shot = CockpitCameraShot(in:b,pilot:b.followedIndex,target:target) {
+                cockpitShot = shot
+                cockpitCuts += 1
+                nextCockpitTime = b.time+28
+                caption = "IN THE COCKPIT"
+                detail = "PILOT VIEW / HOT PURSUIT"
+            }
         case .explosion:
             caption = "FIGHTER DESTROYED"; detail = "COMBAT LOSS / EXPLOSION TRACKING"; explosionCuts += 1
         case .atlantisArrival:
@@ -151,14 +167,21 @@ final class CinematicDirector {
     }
     func requestExplosion(_ fighter: Fighter, in b: Dogfight) {
         guard b.automatic else { return }
+        let cockpit = cockpitShot
         let alreadyFollowing = (event == .attack && (engagementTarget.flatMap { b.fighters[$0] } === fighter || b.fighters[b.followedIndex] === fighter)) || (event == .spin && b.fighters[b.followedIndex] === fighter)
         let important = fighter.hitPoints<=2 || b.sideCount(fighter.side)<=2 || fighter.spin != nil
         guard alreadyFollowing || (event == .none && b.cameraIndex == 2 && b.time>=nextHighlightTime && b.cameraAge>8 && important) else { return }
         explosionOrigin = fighter.position; explosionVelocity = fighter.velocity
         explosionCamera = alreadyFollowing ? b.cameraPosition : fighter.position+unit(b.cameraPosition-fighter.position)*43+V3(0,8,0)
+        if let cockpit {
+            let pilot = cockpit.pilot
+            let up = pilot.node.simdWorldOrientation.act(V3(0,1,0))
+            let right = pilot.node.simdWorldOrientation.act(V3(1,0,0))
+            explosionCamera = pilot.position-pilot.forward*24+right*17+up*10
+        }
         let pendingCut = b.cut
         begin(.explosion,in:b)
-        if alreadyFollowing { b.cut = pendingCut }
+        if alreadyFollowing && cockpit == nil { b.cut = pendingCut }
     }
     func requestAtlantisAttack(_ index: Int, in b: Dogfight) {
         guard b.automatic, event == .none, b.cameraIndex == 2, let city = b.atlantis,
@@ -579,6 +602,7 @@ final class CinematicDirector {
         eventAge += dt; shake *= exp(-dt*8)
         if !b.automatic && event != .none { begin(.none,in:b) }
         let sectorShot = b.showingSector || b.sectorDeparture != nil
+        if sectorShot && cockpitActive { begin(.none,in:b) }
         if sectorShot {
             b.camera.camera!.wantsDepthOfField = false
         } else if b.sectorEstablishingUntil>0 && b.time-dt<b.sectorEstablishingUntil {
@@ -599,6 +623,7 @@ final class CinematicDirector {
         var desired = b.cameraPosition, look = b.cameraLook
         var fov: Float = 51
         var roll: Float = 0
+        var cockpitUp: V3?
         var revealingArrival = false
         var trackingFormation = false
         var focusPoint: V3?
@@ -761,15 +786,24 @@ final class CinematicDirector {
             fov = 51
         } else if event == .attack {
             let f = b.fighters[b.followedIndex]
-            guard let index = engagementTarget, f.active, b.fighters[index].active, eventAge<2.6 else {
+            let duration = cockpitActive ? CockpitCameraShot.duration : 2.6
+            guard let index = engagementTarget, f.active, b.fighters[index].active, eventAge<duration else {
                 endEvent(in:b); update(0,in:b); return
             }
-            let target = b.fighters[index]
-            heading = unit(mix(heading,f.forward,1-exp(-dt*3)))
-            let right = unit(simd_cross(heading,up))
-            let center = mix(f.position,target.position,0.48)
-            desired = center-heading*40+right*43+up*25; look = center
-            fov = min(65,48+simd_distance(f.position,target.position)*0.11)
+            if let cockpitShot {
+                guard let frame = cockpitShot.frame(in:b) else {
+                    endEvent(in:b); update(0,in:b); return
+                }
+                desired = frame.position; look = frame.look; cockpitUp = frame.up
+                fov = CockpitCameraShot.fieldOfView
+            } else {
+                let target = b.fighters[index]
+                heading = unit(mix(heading,f.forward,1-exp(-dt*3)))
+                let right = unit(simd_cross(heading,up))
+                let center = mix(f.position,target.position,0.48)
+                desired = center-heading*40+right*43+up*25; look = center
+                fov = min(65,48+simd_distance(f.position,target.position)*0.11)
+            }
         } else if event == .explosion {
             let drift = explosionVelocity*eventAge*0.18
             desired = explosionCamera+drift; look = explosionOrigin+drift; fov = 48
@@ -828,11 +862,11 @@ final class CinematicDirector {
             }
         }
         let fromAtlantis = event == .atlantisDefense || (event == .atlantisCounterstrike && eventAge<2.05)
-        desired = b.clearCamera(desired,insideAtlantisShield:fromAtlantis)
+        if !cockpitActive { desired = b.clearCamera(desired,insideAtlantisShield:fromAtlantis) }
         if b.cut {
             hardCuts += 1
             b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
-        } else if event == .handoff {
+        } else if event == .handoff || cockpitActive {
             // Attach this brief over-shoulder shot to the pilot's bounded motion,
             // so steering cannot leave the foreground ship outside the frame.
             b.cameraPosition = desired; b.cameraLook = look; velocity = .zero; lookVelocity = .zero
@@ -843,14 +877,14 @@ final class CinematicDirector {
                 b.cameraLook = look; lookVelocity = .zero
             } else { damp(&b.cameraLook,velocity:&lookVelocity,target:look,frequency:9,dt:dt) }
         }
-        b.cameraPosition = b.clearCamera(b.cameraPosition,insideAtlantisShield:fromAtlantis)
-        let jitter = V3(sin(b.time*71),cos(b.time*59),sin(b.time*53))*shake*0.14
+        if !cockpitActive { b.cameraPosition = b.clearCamera(b.cameraPosition,insideAtlantisShield:fromAtlantis) }
+        let jitter = cockpitActive ? V3.zero : V3(sin(b.time*71),cos(b.time*59),sin(b.time*53))*shake*0.14
         b.camera.simdPosition = b.cameraPosition+jitter
-        let cameraUp = roll == 0 ? up : simd_quatf(angle:roll,axis:unit(b.cameraLook-b.cameraPosition)).act(up)
+        let cameraUp = cockpitUp ?? (roll == 0 ? up : simd_quatf(angle:roll,axis:unit(b.cameraLook-b.cameraPosition)).act(up))
         b.camera.look(at:SCNVector3(b.cameraLook),up:SCNVector3(cameraUp),localFront:SCNVector3(0,0,-1))
         let old = Float(b.camera.camera!.fieldOfView)
-        b.camera.camera!.fieldOfView = CGFloat(b.cut || revealingArrival ? fov : old+(fov-old)*(1-exp(-dt*2)))
-        updateFocus(on:focusPoint ?? b.cameraLook,aperture:aperture,dt:dt,in:b)
+        b.camera.camera!.fieldOfView = CGFloat(b.cut || revealingArrival || cockpitActive ? fov : old+(fov-old)*(1-exp(-dt*2)))
+        if !cockpitActive { updateFocus(on:focusPoint ?? b.cameraLook,aperture:aperture,dt:dt,in:b) }
         b.cut = false
     }
 }

@@ -3,7 +3,7 @@ set -euo pipefail
 cd "${0:A:h:h}"
 APP="$PWD/build/Asteroid Squadron.app"
 build_arch="arm64"
-signing_identity="-"
+signing_identity=""
 while (( $# )); do
     case "$1" in
         --output) APP="${2:?Missing app path}"; shift 2 ;;
@@ -11,6 +11,13 @@ while (( $# )); do
         *) print -u2 "Usage: $0 [--output app-path] [--sign identity]"; exit 1 ;;
     esac
 done
+if [[ -z "$signing_identity" ]]; then
+    # A stable certificate keeps macOS recording permission valid after a rebuild.
+    signing_identity="$(security find-identity -v -p codesigning | awk -F '"' '/"Developer ID Application:/ { print $2 }')"
+    if [[ -z "$signing_identity" || "$signing_identity" == *$'\n'* ]]; then
+        signing_identity="-"
+    fi
+fi
 APP="${APP:A}"
 app_version="$(< VERSION)"
 build_number="$(< BUILD_NUMBER)"
@@ -20,7 +27,7 @@ build_temp="$(mktemp -d "$PWD/.cache/build.XXXXXX")"
 trap 'rm -rf "$build_temp"' EXIT
 print "Compiling Apple Silicon ($build_arch)"
 build_slice="$build_temp/AsteroidSquadron"
-xcrun swiftc -O -target "$build_arch-apple-macosx13.0" -module-cache-path "$PWD/.cache/clang" Sources/*.swift -o "$build_slice" -framework AppKit -framework SceneKit
+xcrun swiftc -O -target "$build_arch-apple-macosx13.0" -module-cache-path "$PWD/.cache/clang" Sources/*.swift -o "$build_slice" -framework AppKit -framework SceneKit -framework AVFoundation -framework ScreenCaptureKit
 install -m 755 "$build_slice" "$APP/Contents/MacOS/AsteroidSquadron"
 ./scripts/build-icon.sh "$APP/Contents/Resources" "$build_temp/icon-info.plist"
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -39,6 +46,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 <key>NSPrincipalClass</key><string>NSApplication</string>
+<key>NSScreenCaptureUsageDescription</key><string>Record the Asteroid Squadron window and its soundtrack.</string>
 <key>NSHumanReadableCopyright</key><string>Unofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners.</string>
 </dict></plist>
 PLIST

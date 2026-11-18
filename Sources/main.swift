@@ -790,6 +790,9 @@ func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, colo
 }
 
 final class Overlay: NSView {
+    var controlsDivider: CGFloat = 94 {
+        didSet { if controlsDivider != oldValue { needsDisplay = true } }
+    }
     override var isOpaque: Bool { false }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let result = super.hitTest(point)
@@ -799,10 +802,11 @@ final class Overlay: NSView {
         super.draw(dirtyRect)
         let top = NSRect(x:0,y:bounds.height-180,width:bounds.width,height:180)
         NSGradient(starting:color(0.01,0.025,0.045,0),ending:color(0.01,0.025,0.045,0.9))!.draw(in:top,angle:90)
-        NSGradient(starting:color(0.005,0.015,0.025,0.94),ending:color(0.005,0.015,0.025,0))!.draw(in:NSRect(x:0,y:0,width:bounds.width,height:190),angle:90)
+        NSGradient(starting:color(0.005,0.015,0.025,0.94),ending:color(0.005,0.015,0.025,0))!.draw(in:NSRect(x:0,y:0,width:bounds.width,height:max(190,controlsDivider+64)),angle:90)
         color(0.5,0.8,0.85,0.2).setStroke()
         let line = NSBezierPath(); line.lineWidth = 0.5
-        line.move(to:NSPoint(x:32,y:94)); line.line(to:NSPoint(x:bounds.width-32,y:94)); line.stroke()
+        let inset: CGFloat = bounds.width<720 ? 18 : 32
+        line.move(to:NSPoint(x:inset,y:controlsDivider)); line.line(to:NSPoint(x:bounds.width-inset,y:controlsDivider)); line.stroke()
         // Delicate targeting marks keep the cinema feel without a game HUD.
         color(0.6,0.86,0.9,0.22).setStroke()
         for x: CGFloat in [24,bounds.width-24] {
@@ -832,6 +836,7 @@ final class FlightFrames: NSObject, SCNSceneRendererDelegate {
 }
 
 final class FlightView: SCNView {
+    static let resizeEdge: CGFloat = 6
     let frames = FlightFrames()
     var keyHandler: ((String)->Void)?
     var activity: (()->Void)?
@@ -842,7 +847,9 @@ final class FlightView: SCNView {
     var isDraggingWindow: Bool { dragWindowOrigin != nil }
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) {
-        guard let key = event.charactersIgnoringModifiers?.lowercased(), key != "t" || !event.isARepeat else { return }
+        guard let key = event.charactersIgnoringModifiers?.lowercased() else { return }
+        if event.isARepeat && (key == "t" || key == "v" || key == "m") { return }
+        if (key == "v" || key == "m") && !event.modifierFlags.intersection([.command,.control,.option]).isEmpty { return }
         keyHandler?(key); activity?()
     }
     override func mouseMoved(with event: NSEvent) { activity?() }
@@ -850,6 +857,8 @@ final class FlightView: SCNView {
         lastPointerEvent = "down / \(event.clickCount) clicks"
         activity?()
         guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        let point = convert(event.locationInWindow,from:nil)
+        guard bounds.insetBy(dx:Self.resizeEdge,dy:Self.resizeEdge).contains(point) else { return }
         if event.clickCount == 2 { window.performZoom(nil) }
         else {
             dragWindowOrigin = window.frame.origin
@@ -873,7 +882,7 @@ final class FlightView: SCNView {
     }
 }
 
-final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     private static let pauseWhenUnfocusedKey = "PauseWhenUnfocused"
     private static let renderTimeout: TimeInterval = 2
     private static let renderSurfaceIdleLimit: TimeInterval = 30
@@ -908,17 +917,30 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     var view: FlightView!
     var overlay: Overlay!
+    private var cockpitOverlay: CockpitOverlay!
     var battle: Dogfight!
     let awake = KeepAwake()
     private let soundtrack = SoundtrackPlayback()
     private var soundtrackTrackID: UUID?
+    private var shownSoundtrackProfile = SoundtrackProfile.default
     private var soundtrackStatus: NSMenuItem!
     private var removeSoundtrackItem: NSMenuItem!
+    private var soundtrackProfileItems: [SoundtrackProfile: NSMenuItem] = [:]
     private var soundtrackWaveform: SoundtrackWaveform!
+    private let recording = RecordingControls()
+    private var recordingItem: NSMenuItem!
+    private var selectedResolution: (pixels: NSSize, frameSize: NSSize)?
+    private var applyingWindowPreset = false
+    private var fullScreenTransition = false
+    private var unlockedSizeLimits: (min: NSSize, max: NSSize)?
+    private var resizeLocked: Bool { recording.lockedFrameSize != nil }
+    private var canApplyWindowPreset: Bool { !resizeLocked && !fullScreenTransition && window != nil && !window.styleMask.contains(.fullScreen) }
     var timer: Timer?
     var lastTime = ProcessInfo.processInfo.systemUptime
     var lastActivity = ProcessInfo.processInfo.systemUptime
     var lastHUD: TimeInterval = 0
+    private var brand: NSTextField!
+    private var flightButtons: [NSButton] = []
     var cameraTitle: NSTextField!
     var cameraDetail: NSTextField!
     var status: NSTextField!
@@ -930,6 +952,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var hint: NSTextField!
     var autoButton: NSButton!
     var pauseButton: NSButton!
+    private var fullScreenButton: NSButton!
     var awakeItem: NSMenuItem!
     var autoItem: NSMenuItem!
     var pauseItem: NSMenuItem!
@@ -949,7 +972,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sectorBackdrops = SectorBackdrops(seed:seed)
         let backdrop = sectorBackdrops.next(preferred:requestedLandmark())
         let previewDeparture = CommandLine.arguments.contains("--preview-sector-change")
-        battle = Dogfight(seed:seed,initialFactions:requestedFactions(),initialArrivals:!previewDeparture,
+        let previewCockpit = CommandLine.arguments.contains("--preview-cockpit")
+        battle = Dogfight(seed:seed,initialFactions:requestedFactions(),initialArrivals:!previewDeparture && !previewCockpit,
                           firstAtlantisEncounter:CommandLine.arguments.contains("--atlantis") ? 1...1 : Atlantis.firstEncounterWindow,
                           landmark:backdrop.kind,sectorWaveLimit:backdrop.waves)
         if previewDeparture {
@@ -958,19 +982,26 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 fighter.state = .destroyed; fighter.node.isHidden = true
             }
         }
+        if previewCockpit {
+            configureCockpitReview(battle)
+            manuallyPaused = true
+        }
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x:0,y:0,width:1440,height:900)
         let width = min(1440,screen.width-80), height = min(900,screen.height-80)
         window = NSWindow(contentRect:NSRect(x:0,y:0,width:width,height:height),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         window.title = "Asteroid Squadron"
         window.titleVisibility = .hidden; window.titlebarAppearsTransparent = true
         window.backgroundColor = .black; window.isMovableByWindowBackground = false
-        window.minSize = NSSize(width:840,height:540)
+        window.minSize = NSSize(width:300,height:360)
         window.collectionBehavior = [.fullScreenPrimary]
         window.delegate = self; window.acceptsMouseMovedEvents = true
         window.setFrameAutosaveName("AsteroidSquadronWindow")
         if !window.setFrameUsingName("AsteroidSquadronWindow") { window.center() }
         view = makeFlightView(frame:window.contentView!.bounds)
         window.contentView = view
+        cockpitOverlay = CockpitOverlay(frame:view.bounds)
+        cockpitOverlay.autoresizingMask = [.width,.height]
+        view.addSubview(cockpitOverlay)
         buildHUD()
         wipe = SectorWipeView(frame:view.bounds)
         wipe.autoresizingMask = [.width,.height]
@@ -981,7 +1012,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self, event.window === self.window, !self.window.styleMask.contains(.fullScreen) else { return event }
             if event.type == .leftMouseDown {
                 let point = self.view.convert(event.locationInWindow,from:nil)
-                guard self.view.bounds.contains(point), point.y<self.view.bounds.height-28 else { return event }
+                let interior = self.view.bounds.insetBy(dx:FlightView.resizeEdge,dy:FlightView.resizeEdge)
+                guard interior.contains(point), point.y<self.view.bounds.height-28 else { return event }
                 var hit = self.view.hitTest(point)
                 while let candidate = hit {
                     if candidate is NSButton { return event }
@@ -1000,8 +1032,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         battle.cameraChanged = { [weak self] in self?.updateCameraHUD() }
         soundtrack.onChange = { [weak self] in self?.updateSoundtrackMenu() }
         soundtrack.onError = { [weak self] url,error in self?.showSoundtrackError(url,error:error) }
+        recording.onStateChange = { [weak self] in self?.updateRecordingControls() }
         updateCameraHUD()
         _ = awake.start(); updateStatus()
+        cockpitOverlay.setFaction(battle.director.cockpitFaction)
         // Protect timers from App Nap while this explicitly requested agent display runs.
         // caffeinate owns sleep prevention; this activity only prevents App Nap.
         activityToken = ProcessInfo.processInfo.beginActivity(options:.userInitiatedAllowingIdleSystemSleep,reason:"Render the active dogfight display")
@@ -1053,6 +1087,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuView.addItem(withTitle:"Transition to Next Sector",action:#selector(transitionSector),keyEquivalent:"t")
         menuView.addItem(withTitle:"Queue Atlantis Siege",action:#selector(queueAtlantisSiege),keyEquivalent:"s")
         menuView.addItem(withTitle:"Next Planet Biome",action:#selector(nextBiome),keyEquivalent:"b")
+        menuView.addItem(.separator())
+        recordingItem = menuView.addItem(withTitle:recording.menuTitle,action:#selector(toggleRecording),keyEquivalent:"")
+        menuView.addItem(withTitle:"Discard Unsaved Recording",action:#selector(discardRecording),keyEquivalent:"")
         viewItem.submenu = menuView
         for item in menu.items+menuView.items { if item.action != nil && item.action != #selector(NSApplication.hide(_:)) && item.action != #selector(NSApplication.terminate(_:)) { item.target = self } }
         let soundtrackItem = NSMenuItem(); bar.addItem(soundtrackItem)
@@ -1065,7 +1102,81 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         musicMenu.addItem(withTitle:"Choose Audio File…",action:#selector(chooseSoundtrack),keyEquivalent:"o").target = self
         removeSoundtrackItem = musicMenu.addItem(withTitle:"Remove Soundtrack",action:#selector(removeSoundtrack),keyEquivalent:"")
         removeSoundtrackItem.target = self; removeSoundtrackItem.isEnabled = false
+        musicMenu.addItem(.separator())
+        let profileItem = musicMenu.addItem(withTitle:"Analysis Profile",action:nil,keyEquivalent:"")
+        let profileMenu = NSMenu(title:"Analysis Profile")
+        profileItem.submenu = profileMenu
+        for profile in SoundtrackProfile.allCases {
+            let item = profileMenu.addItem(withTitle:profile.title,action:#selector(selectSoundtrackProfile(_:)),keyEquivalent:"")
+            item.target = self
+            item.representedObject = profile.rawValue
+            item.state = profile == soundtrack.profile ? .on : .off
+            soundtrackProfileItems[profile] = item
+        }
+        let windowItem = NSMenuItem(); bar.addItem(windowItem)
+        let windowMenu = NSMenu(title:"Window")
+        windowItem.submenu = windowMenu
+        addWindowPresets("Resolution",presets:WindowPreset.resolutions,to:windowMenu)
+        addWindowPresets("Aspect Ratio",presets:WindowPreset.aspectRatios,to:windowMenu)
         NSApp.mainMenu = bar
+    }
+
+    private func addWindowPresets(_ title: String, presets: [WindowPreset], to parent: NSMenu) {
+        let group = parent.addItem(withTitle:title,action:nil,keyEquivalent:"")
+        let menu = NSMenu(title:title)
+        group.submenu = menu
+        for preset in presets {
+            let item = menu.addItem(withTitle:preset.title,action:#selector(applyWindowPreset(_:)),keyEquivalent:"")
+            item.target = self
+            item.representedObject = preset
+        }
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(toggleRecording): return !fullScreenTransition && recording.canToggle
+        case #selector(discardRecording): return recording.canDiscard
+        case #selector(applyWindowPreset(_:)),#selector(fillWindow): return canApplyWindowPreset
+        case #selector(fullscreen): return !resizeLocked && !fullScreenTransition
+        default: return true
+        }
+    }
+
+    @objc private func applyWindowPreset(_ sender: NSMenuItem) {
+        guard canApplyWindowPreset, let preset = sender.representedObject as? WindowPreset,
+              let screen = window.screen ?? NSScreen.main else { return }
+        applyingWindowPreset = true
+        window.setFrame(preset.frame(for:window,in:screen.visibleFrame),display:true)
+        applyingWindowPreset = false
+        selectedResolution = preset.captureSize.map { ($0,window.frame.size) }
+        layoutHUD()
+        writeRuntimeStatus()
+        showControls()
+    }
+
+    @objc private func toggleRecording() {
+        guard !fullScreenTransition else { return }
+        let resolution = selectedResolution.flatMap { $0.frameSize == window.frame.size ? $0.pixels : nil }
+        let pixels = resolution ?? view.convertToBacking(view.bounds).size
+        recording.toggle(in:window,pixels:pixels,fps:highQuality ? 60 : 30)
+    }
+    @objc private func discardRecording() { recording.discardUnsaved() }
+
+    private func updateRecordingControls() {
+        recordingItem.title = recording.menuTitle
+        if let size = recording.lockedFrameSize, unlockedSizeLimits == nil, !window.styleMask.contains(.fullScreen) {
+            unlockedSizeLimits = (window.minSize,window.maxSize)
+            window.minSize = size
+            window.maxSize = size
+        } else if !resizeLocked, let limits = unlockedSizeLimits {
+            window.maxSize = limits.max
+            window.minSize = limits.min
+            unlockedSizeLimits = nil
+        }
+        window.standardWindowButton(.zoomButton)?.isEnabled = !resizeLocked
+        fullScreenButton.isEnabled = !resizeLocked
+        showControls()
+        writeRuntimeStatus()
     }
 
     @objc private func chooseSoundtrack() {
@@ -1079,19 +1190,42 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func removeSoundtrack() { soundtrack.clear() }
 
+    @objc private func selectSoundtrackProfile(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String, let profile = SoundtrackProfile(rawValue:value) else { return }
+        soundtrack.selectProfile(profile)
+    }
+
+    private func cycleSoundtrackProfile() {
+        let profiles = SoundtrackProfile.allCases
+        guard let index = profiles.firstIndex(of:soundtrack.profile) else { return }
+        soundtrack.selectProfile(profiles[(index+1)%profiles.count])
+    }
+
     private func updateSoundtrackMenu() {
         let track = soundtrack.track
-        if track?.id != soundtrackTrackID {
+        let trackChanged = track?.id != soundtrackTrackID
+        let profileChanged = soundtrack.profile != shownSoundtrackProfile
+        if trackChanged || profileChanged {
+            battle.soundtrackTiming = soundtrack.analysis.map { SoundtrackTiming(analysis:$0) }
+            if soundtrack.isPlaying && sectorWipe == nil {
+                battle.soundtrackTiming?.observe(position:soundtrack.position)
+            }
+        }
+        if trackChanged {
             soundtrackTrackID = track?.id
-            battle.soundtrackTiming = track.map { SoundtrackTiming(analysis:$0.analysis) }
-            if let track {
-                soundtrackWaveform.setTrack(name:track.url.lastPathComponent,waveform:track.analysis.waveform)
+            if let track, let analysis = soundtrack.analysis {
+                soundtrackWaveform.setTrack(name:track.url.lastPathComponent,waveform:analysis.waveform)
             }
             soundtrackWaveform.progress = 0
             soundtrackWaveform.isHidden = track == nil
-            layoutBottomHUD()
-            showControls()
+            layoutHUD()
         }
+        if profileChanged {
+            shownSoundtrackProfile = soundtrack.profile
+            soundtrackWaveform.setProfile(title:soundtrack.profile.title)
+            for (profile,item) in soundtrackProfileItems { item.state = profile == soundtrack.profile ? .on : .off }
+        }
+        if trackChanged || profileChanged { showControls(); writeRuntimeStatus() }
         if let loading = soundtrack.loadingURL {
             soundtrackStatus.title = "Analyzing \(loading.lastPathComponent)…"
         } else {
@@ -1125,7 +1259,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         overlay = Overlay(frame:view.bounds); overlay.autoresizingMask = [.width,.height]
         view.addSubview(overlay)
         let w = overlay.bounds.width, h = overlay.bounds.height
-        let brand = label("A S T E R O I D   S Q U A D R O N",size:18,weight:.medium,color:color(0.88,0.94,0.94))
+        brand = label("A S T E R O I D   S Q U A D R O N",size:18,weight:.medium,color:color(0.88,0.94,0.94))
         place(brand,x:36,y:h-83,width:550,height:27,mask:[.minYMargin])
         sector = label("",size:10,color:color(0.46,0.64,0.69),mono:true)
         place(sector,x:38,y:h-105,width:550,height:17,mask:[.minYMargin])
@@ -1154,33 +1288,80 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         place(next,x:w-305,y:38,width:89,height:34,mask:[.minXMargin])
         pauseButton = button("Ⅱ",action:#selector(togglePause),tooltip:"Pause flight; keep awake stays on (Space)")
         place(pauseButton,x:w-204,y:38,width:44,height:34,mask:[.minXMargin])
-        let full = button("⛶",action:#selector(fullscreen),tooltip:"Full screen (F). Double-click the scene to fill / restore the window instead.")
-        place(full,x:w-148,y:38,width:44,height:34,mask:[.minXMargin])
+        fullScreenButton = button("⛶",action:#selector(fullscreen),tooltip:"Full screen (F). Double-click the scene to fill / restore the window instead.")
+        place(fullScreenButton,x:w-148,y:38,width:44,height:34,mask:[.minXMargin])
         let help = button("?",action:#selector(showHelp),tooltip:"Controls & information (?)")
         place(help,x:w-92,y:38,width:54,height:34,mask:[.minXMargin])
+        flightButtons = [autoButton,next,pauseButton,fullScreenButton,help]
         soundtrackWaveform = SoundtrackWaveform(frame:.zero)
         soundtrackWaveform.isHidden = true
         soundtrackWaveform.onRemove = { [weak self] in self?.removeSoundtrack() }
+        soundtrackWaveform.onCycleProfile = { [weak self] in self?.cycleSoundtrackProfile() }
+        soundtrackWaveform.setProfile(title:soundtrack.profile.title)
         overlay.addSubview(soundtrackWaveform)
-        hint = label("C  CAMERA     F  FULL SCREEN     SPACE  PAUSE     T  SECTOR     S  SIEGE     ?  HELP",size:9,color:color(0.4,0.55,0.59),mono:true)
+        hint = label("C  CAMERA     F  FULL SCREEN     SPACE  PAUSE     T  SECTOR     S  SIEGE     V  RECORD     ?  HELP",size:9,color:color(0.4,0.55,0.59),mono:true)
         hint.alignment = .right
         place(hint,x:w-680,y:108,width:642,height:17,mask:[.minXMargin])
-    }
-    private func layoutBottomHUD() {
-        guard let soundtrackWaveform, let autoButton else { return }
-        guard !soundtrackWaveform.isHidden else {
-            cameraTitle.setFrameSize(NSSize(width:420,height:30))
-            cameraDetail.setFrameSize(NSSize(width:430,height:17))
-            return
+        for text in [brand,sector,status,eventStatus,telemetry,aceStatus,aceHistory] {
+            text?.lineBreakMode = .byTruncatingTail
         }
-        let left = cameraTitle.frame.minX
-        let right = autoButton.frame.minX
-        let titleWidth = min(340,max(0,(right-left)*0.47))
-        cameraTitle.setFrameSize(NSSize(width:titleWidth,height:30))
-        cameraDetail.setFrameSize(NSSize(width:titleWidth-1,height:17))
-        let gapStart = left+titleWidth+16, gapEnd = right-16
-        let width = max(0,min(350,gapEnd-gapStart))
-        soundtrackWaveform.frame = NSRect(x:((gapStart+gapEnd-width)/2).rounded(),y:29,width:width,height:52)
+        layoutHUD()
+    }
+    private func layoutHUD() {
+        guard let soundtrackWaveform, let overlay else { return }
+        let w = overlay.bounds.width, h = overlay.bounds.height
+        let portrait = w<720, compact = w<900
+        let margin: CGFloat = portrait ? 18 : (compact ? 26 : 38)
+        let fullWidth = max(0,w-2*margin)
+        let hasTrack = !soundtrackWaveform.isHidden
+        let buttonWidths: [CGFloat] = compact ? [68,62,32,32,32] : [93,89,44,44,54]
+        let baseGap: CGFloat = compact ? 7 : 12
+        let preferredSpan = buttonWidths.reduce(0,+)+CGFloat(buttonWidths.count-1)*baseGap
+        let buttonScale = min(1,fullWidth/preferredSpan)
+        let buttonsWidth = preferredSpan*buttonScale
+        let buttonGap = baseGap*buttonScale
+        var buttonX = portrait ? floor((w-buttonsWidth)/2) : w-margin-buttonsWidth
+        for (button,width) in zip(flightButtons,buttonWidths) {
+            button.frame = NSRect(x:buttonX,y:portrait ? 15 : 38,width:width*buttonScale,height:34)
+            buttonX += width*buttonScale+buttonGap
+        }
+
+        if portrait {
+            let titleY: CGFloat = hasTrack ? 112 : 62
+            cameraTitle.frame = NSRect(x:margin,y:titleY,width:fullWidth,height:29)
+            cameraDetail.frame = NSRect(x:margin+1,y:titleY-15,width:fullWidth-1,height:15)
+            let waveWidth = min(350,fullWidth)
+            soundtrackWaveform.frame = NSRect(x:floor((w-waveWidth)/2),y:53,width:waveWidth,height:43)
+            overlay.controlsDivider = titleY+34
+        } else {
+            let available = max(0,autoButton.frame.minX-margin)
+            let titleWidth = hasTrack ? min(340,available*0.47) : min(430,available-12)
+            cameraTitle.frame = NSRect(x:margin,y:48,width:titleWidth,height:30)
+            cameraDetail.frame = NSRect(x:margin+1,y:27,width:titleWidth-1,height:17)
+            if hasTrack {
+                let gapStart = margin+titleWidth+16, gapEnd = autoButton.frame.minX-16
+                let width = max(0,min(350,gapEnd-gapStart))
+                soundtrackWaveform.frame = NSRect(x:((gapStart+gapEnd-width)/2).rounded(),y:29,width:width,height:52)
+            }
+            overlay.controlsDivider = 94
+        }
+
+        let brandSize: CGFloat = portrait && w<480 ? 13 : 18
+        if brand.font?.pointSize != brandSize { brand.font = .systemFont(ofSize:brandSize,weight:.medium) }
+        let topSplit = !compact
+        let rightWidth = min(352,fullWidth*0.43)
+        let textWidth = topSplit ? max(0,fullWidth-rightWidth-12) : fullWidth
+        brand.frame = NSRect(x:margin,y:h-(compact ? 66 : 83),width:textWidth,height:27)
+        sector.frame = NSRect(x:margin,y:brand.frame.minY-19,width:textWidth,height:17)
+        status.alignment = topSplit ? .right : .left
+        eventStatus.alignment = status.alignment
+        status.frame = NSRect(x:topSplit ? w-margin-rightWidth : margin,y:topSplit ? h-80 : sector.frame.minY-20,
+                              width:topSplit ? rightWidth : fullWidth,height:20)
+        eventStatus.frame = NSRect(x:status.frame.minX,y:status.frame.minY-19,width:status.frame.width,height:16)
+        telemetry.frame = NSRect(x:margin,y:portrait ? eventStatus.frame.minY-19 : 107,width:min(680,fullWidth),height:17)
+        aceStatus.frame = NSRect(x:margin,y:portrait ? telemetry.frame.minY-17 : 150,width:fullWidth,height:17)
+        aceHistory.frame = NSRect(x:margin,y:portrait ? aceStatus.frame.minY-17 : 130,width:fullWidth,height:17)
+        hint.isHidden = w<1200
     }
     func startTimer() {
         timer?.invalidate(); lastTime = ProcessInfo.processInfo.systemUptime
@@ -1212,6 +1393,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         if sectorFrameReady && (!battle.paused || manualSectorWipe) { updateSectorWipe(dt:dt) }
+        cockpitOverlay.setFaction(battle.director.cockpitFaction)
         updateRendering()
         checkRendering(at:now)
         if now-lastHUD > 1 {
@@ -1264,7 +1446,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 eventStatus.stringValue = String(format:"%03d LOSSES   /   %03d REINFORCEMENTS",battle.destroyed,battle.reinforcements)
                 eventStatus.textColor = color(0.4,0.56,0.61)
             }
-            hint.isHidden = overlay.bounds.width<1120
             let idle = now-lastActivity > 9
             if !hudHidden { overlay.alphaValue = idle ? 0.34 : 1 }
             updateStatus()
@@ -1306,6 +1487,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case "r": newArena()
         case "t": transitionSector()
         case "s": queueAtlantisSiege()
+        case "v": toggleRecording()
+        case "m": cycleSoundtrackProfile()
         case "b": nextBiome()
         case "?", "/": showHelp()
         case "\u{1b}": if window.styleMask.contains(.fullScreen) { fullscreen() }
@@ -1395,8 +1578,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         view = makeFlightView(frame:oldView.frame)
         view.sceneTime = oldView.sceneTime
         window.contentView = view
+        cockpitOverlay.frame = view.bounds
+        view.addSubview(cockpitOverlay)
         overlay.frame = view.bounds
         view.addSubview(overlay)
+        layoutHUD()
         wipe.frame = view.bounds
         view.addSubview(wipe)
         if restoreFocus { window.makeFirstResponder(view) }
@@ -1406,8 +1592,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     @objc func toggleAwake() { if awake.enabled { awake.stop() } else { _ = awake.start() }; updateStatus(); showControls() }
     @objc func toggleHUD() { hudHidden.toggle(); overlay.isHidden = hudHidden; showControls() }
-    @objc func fullscreen() { window.toggleFullScreen(nil); showControls() }
-    @objc func fillWindow() { if !window.styleMask.contains(.fullScreen) { window.performZoom(nil) }; showControls() }
+    @objc func fullscreen() {
+        guard !resizeLocked && !fullScreenTransition else { return }
+        window.toggleFullScreen(nil); showControls()
+    }
+    @objc func fillWindow() {
+        guard canApplyWindowPreset else { return }
+        window.performZoom(nil); showControls()
+    }
     @objc func toggleQuality() {
         highQuality.toggle(); view.preferredFramesPerSecond = highQuality ? 60 : 30
         view.antialiasingMode = highQuality ? .multisampling4X : .multisampling2X
@@ -1418,6 +1610,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         battle = next
         battle.cameraChanged = { [weak self] in self?.updateCameraHUD() }
         view.scene = battle.scene; view.pointOfView = battle.camera
+        cockpitOverlay.setFaction(nil)
         updatePauseState()
         updateCameraHUD()
     }
@@ -1459,7 +1652,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         soundtrack.setPlaying(false)
         soundtrack.rewind()
         soundtrackWaveform.progress = 0
-        battle.soundtrackTiming = soundtrack.track.map { SoundtrackTiming(analysis:$0.analysis) }
+        battle.soundtrackTiming = soundtrack.analysis.map { SoundtrackTiming(analysis:$0) }
         if !battle.paused { battle.soundtrackTiming?.observe(position:0) }
         let seed = UInt64.random(in:1...UInt64.max)
         let backdrop = sectorBackdrops.next()
@@ -1485,6 +1678,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { recording.prepareToTerminate() }
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate(); soundtrack.clear(); awake.stop()
         if let pointerMonitor { NSEvent.removeMonitor(pointerMonitor) }
@@ -1500,10 +1694,29 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowDidChangeOcclusionState(_ notification: Notification) { updateRendering() }
     func windowDidMiniaturize(_ notification: Notification) { updateRendering() }
     func windowDidDeminiaturize(_ notification: Notification) { updateRendering() }
-    func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
-        window.screen?.visibleFrame ?? newFrame
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard recording.isBusy else { return true }
+        NSApp.terminate(nil)
+        return false
     }
-    func windowDidResize(_ notification: Notification) { layoutBottomHUD(); writeRuntimeStatus() }
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize { recording.lockedFrameSize ?? frameSize }
+    func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool { !resizeLocked }
+    func windowWillEnterFullScreen(_ notification: Notification) { fullScreenTransition = true }
+    func windowWillExitFullScreen(_ notification: Notification) { fullScreenTransition = true }
+    func windowDidEnterFullScreen(_ notification: Notification) { fullScreenTransition = false }
+    func windowDidExitFullScreen(_ notification: Notification) { fullScreenTransition = false }
+    func windowDidFailToEnterFullScreen(_ window: NSWindow) { fullScreenTransition = false }
+    func windowDidFailToExitFullScreen(_ window: NSWindow) { fullScreenTransition = false }
+    func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
+        resizeLocked ? window.frame : (window.screen?.visibleFrame ?? newFrame)
+    }
+    func windowDidResize(_ notification: Notification) {
+        if let selectedResolution, !applyingWindowPreset, selectedResolution.frameSize != window.frame.size {
+            self.selectedResolution = nil
+        }
+        layoutHUD()
+        writeRuntimeStatus()
+    }
     func windowDidMove(_ notification: Notification) { writeRuntimeStatus() }
     func smokeTest() {
         let output = URL(fileURLWithPath:CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png")
@@ -1535,9 +1748,16 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         stats["soundtrack"] = soundtrack.track?.url.lastPathComponent ?? ""
         stats["soundtrackPosition"] = soundtrack.position ?? 0
         stats["soundtrackPlaying"] = soundtrack.isPlaying
-        stats["soundtrackCues"] = soundtrack.track?.analysis.cues.count ?? 0
+        stats["soundtrackProfile"] = soundtrack.profile.title
+        stats["soundtrackCues"] = soundtrack.analysis?.cues.count ?? 0
         stats["soundtrackCuts"] = battle.director.soundtrackCuts
+        stats["cockpitActive"] = battle.director.cockpitActive
+        stats["cockpitFaction"] = battle.director.cockpitFaction?.rawValue ?? ""
+        stats["cockpitCuts"] = battle.director.cockpitCuts
         stats["atlantisSiegeQueued"] = battle.manualAtlantisSiegeQueued
+        stats["recordingState"] = recording.state
+        stats["recordingSizeLocked"] = resizeLocked
+        stats["recordingPresetPixels"] = selectedResolution.map { NSStringFromSize($0.pixels) } ?? ""
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }
@@ -1553,7 +1773,11 @@ func requestedSeed() -> UInt64 {
     return UInt64.random(in:1...UInt64.max)
 }
 
-if CommandLine.arguments.contains("--verify-soundtrack") {
+if CommandLine.arguments.contains("--verify-cockpit") {
+    verifyCockpit()
+} else if let index = CommandLine.arguments.firstIndex(of:"--render-cockpit-review"), index+1<CommandLine.arguments.count {
+    renderCockpitReview(directory:URL(fileURLWithPath:CommandLine.arguments[index+1]))
+} else if CommandLine.arguments.contains("--verify-soundtrack") {
     verifySoundtrack()
 } else if CommandLine.arguments.contains("--verify-sectors") {
     let args = CommandLine.arguments

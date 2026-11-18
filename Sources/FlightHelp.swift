@@ -26,7 +26,7 @@ final class FlightHelp: NSWindow {
 
     static func present(attachedTo parent: NSWindow, completion: (() -> Void)? = nil) {
         guard parent.attachedSheet == nil else { return }
-        let width = min(704, parent.frame.width - 32)
+        let width = min(704, parent.frame.width - 24)
         let height = min(parent.frame.height, parent.screen?.visibleFrame.height ?? parent.frame.height) - 48
         let sheet = FlightHelp(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                                styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
@@ -45,46 +45,46 @@ final class FlightHelp: NSWindow {
     @objc private func dismiss() { sheetParent?.endSheet(self, returnCode: .OK) }
 
     private func buildContents(width: CGFloat, maximumHeight: CGFloat) {
-        let inset: CGFloat = 24
+        let compact = width < 600
+        let inset: CGFloat = compact ? 14 : 24
         let gap: CGFloat = 12
         let bodyWidth = width - 2 * inset
-        let cardWidth = (bodyWidth - gap) / 2
+        let cardWidth = compact ? bodyWidth : (bodyWidth - gap) / 2
 
-        let left = [
-            card("Camera & Flight", width: cardWidth, entries: [
-                Shortcut("C / N / →", "Next camera", spokenAs: "C, N, or Right Arrow"),
-                Shortcut("A", "Automatic camera", "Follow the fight and cut to major events."),
-                Shortcut("Space / P", "Pause or resume flight", spokenAs: "Space or P"),
-                Shortcut("F", "Full screen", "Press Escape to leave full screen."),
-                Shortcut("H / U", "Show or hide overlay", spokenAs: "H or U")
-            ]),
-            card("Soundtrack", width: cardWidth, entries: [
-                Shortcut("⌘O", "Choose a soundtrack", "Automatic cameras cut to musical cues between major events.", spokenAs: "Command O"),
-                Shortcut("×", "Remove soundtrack", "Use the button beside the waveform to stop playback.", spokenAs: "Remove Soundtrack button")
-            ], footnote: "Choose MP3, WAV, M4A, FLAC or other formats macOS can play.")
-        ]
-        let right = [
-            card("Arena & Encounters", width: cardWidth, entries: [
-                Shortcut("T", "Next sector", "Wipe to a new setting and keep the music playing."),
-                Shortcut("R", "Restart the arena", "Generate a new arena, reset Ace records and restart the music."),
-                Shortcut("B", "Change planet biome", "Generate a new world in a planet sector."),
-                Shortcut("S", "Queue the Atlantis siege", "Start after the next eligible squadron victory.")
-            ]),
-            card("Window & Display", width: cardWidth, entries: [
-                Shortcut("K", "Keep computer and display awake"),
-                Shortcut("J", "Switch between 30 and 60 fps"),
-                Shortcut("⌘Q", "Quit and release keep awake", spokenAs: "Command Q")
-            ], footnote: "Drag the scene to move the window or double-click to fill or restore it. Set automatic pausing in Flight → Pause When Unfocused.")
-        ]
+        let camera = card("Camera & Flight", width: cardWidth, entries: [
+            Shortcut("C / N / →", "Next camera", spokenAs: "C, N, or Right Arrow"),
+            Shortcut("A", "Automatic camera", "Follow the fight and cut to major events."),
+            Shortcut("Space / P", "Pause or resume flight", spokenAs: "Space or P"),
+            Shortcut("F", "Full screen", "Press Escape to leave full screen."),
+            Shortcut("H / U", "Show or hide overlay", spokenAs: "H or U")
+        ])
+        let arena = card("Arena & Encounters", width: cardWidth, entries: [
+            Shortcut("T", "Next sector", "Wipe to a new setting and keep the music playing."),
+            Shortcut("R", "Restart the arena", "Generate a new arena, reset Ace records and restart the music."),
+            Shortcut("B", "Change planet biome", "Generate a new world in a planet sector."),
+            Shortcut("S", "Queue the Atlantis siege", "Start after the next eligible squadron victory.")
+        ])
+        let media = card("Soundtrack & Recording", width: cardWidth, entries: [
+            Shortcut("⌘O", "Choose a soundtrack", "Automatic cameras cut to musical cues between major events.", spokenAs: "Command O"),
+            Shortcut("M", "Cycle soundtrack profile", "You can also click the profile beside the waveform."),
+            Shortcut("×", "Remove soundtrack", "Use the button beside the waveform to stop playback.", spokenAs: "Remove Soundtrack button"),
+            Shortcut("V", "Record the window and soundtrack", "Press V again to stop and choose where to save the video.")
+        ], footnote: "Choose MP3, WAV, M4A, FLAC or other formats macOS can play.")
+        let display = card("Window & Display", width: cardWidth, entries: [
+            Shortcut("K", "Keep computer and display awake"),
+            Shortcut("J", "Switch between 30 and 60 fps"),
+            Shortcut("⌘Q", "Quit and release keep awake", spokenAs: "Command Q")
+        ], footnote: "Set a window resolution or fit an aspect ratio from the Window menu before recording. Drag the scene to move the window or double-click to fill or restore it. Automatic pause is in Flight → Pause When Unfocused.")
 
         let document = DocumentView(frame: .zero)
+        let rows = compact ? [[camera], [arena], [media], [display]] : [[camera, arena], [media, display]]
         var y: CGFloat = 0
-        for (first, second) in zip(left, right) {
-            let height = max(first.fittingSize.height, second.fittingSize.height)
-            first.frame = NSRect(x: 0, y: y, width: cardWidth, height: height)
-            second.frame = NSRect(x: cardWidth + gap, y: y, width: cardWidth, height: height)
-            document.addSubview(first)
-            document.addSubview(second)
+        for row in rows {
+            let height = row.map(\.fittingSize.height).max() ?? 0
+            for (column, card) in row.enumerated() {
+                card.frame = NSRect(x: CGFloat(column) * (cardWidth + gap), y: y, width: cardWidth, height: height)
+                document.addSubview(card)
+            }
             y += height + gap
         }
         let bodyHeight = y - gap
@@ -125,11 +125,16 @@ final class FlightHelp: NSWindow {
         content.addSubview(done)
         defaultButtonCell = done.cell as? NSButtonCell
 
-        let footer = text("? opens Flight Controls", size: 11, color: Self.muted, mono: true)
-        footer.frame.origin = NSPoint(x: inset, y: round(done.frame.midY-footer.frame.height/2))
-        footer.setAccessibilityLabel("Question mark opens Flight Controls")
-        content.addSubview(footer)
-        content.setAccessibilityChildren([title, appName, scroll, footer, done])
+        var accessibilityChildren: [Any] = [title, appName, scroll]
+        if !compact {
+            let footer = text("? opens Flight Controls", size: 11, color: Self.muted, mono: true)
+            footer.frame.origin = NSPoint(x: inset, y: round(done.frame.midY-footer.frame.height/2))
+            footer.setAccessibilityLabel("Question mark opens Flight Controls")
+            content.addSubview(footer)
+            accessibilityChildren.append(footer)
+        }
+        accessibilityChildren.append(done)
+        content.setAccessibilityChildren(accessibilityChildren)
     }
 
     private func card(_ title: String, width: CGFloat, entries: [Shortcut], footnote: String? = nil) -> NSView {

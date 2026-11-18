@@ -3,11 +3,13 @@ import AppKit
 final class SoundtrackWaveform: NSView {
     private let nameLabel = label("", size: 11, weight: .medium, color: color(0.81, 0.90, 0.92))
     private let removeButton = NSButton(title: "×", target: nil, action: nil)
+    private let profileButton = NSButton(title: "", target: nil, action: nil)
     private var levels: [Float] = []
     private var waveformPath: CGPath?
     private var waveformPathRect = NSRect.zero
 
     var onRemove: (() -> Void)?
+    var onCycleProfile: (() -> Void)?
     var progress: Double = 0 {
         didSet {
             let pixels = waveRect.width * (window?.backingScaleFactor ?? 1)
@@ -22,26 +24,47 @@ final class SoundtrackWaveform: NSView {
         nameLabel.lineBreakMode = .byTruncatingMiddle
         addSubview(nameLabel)
 
-        removeButton.isBordered = false
+        style(removeButton)
         let symbol = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
         if let symbol {
             removeButton.image = symbol.withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
             removeButton.imagePosition = .imageOnly
         }
         removeButton.contentTintColor = color(0.72, 0.84, 0.88)
-        removeButton.wantsLayer = true
-        removeButton.layer?.backgroundColor = color(0.12, 0.20, 0.25, 0.68).cgColor
-        removeButton.layer?.borderColor = color(0.47, 0.70, 0.76, 0.30).cgColor
-        removeButton.layer?.borderWidth = 0.5
-        removeButton.layer?.cornerRadius = 6
         removeButton.setAccessibilityLabel("Remove soundtrack")
         removeButton.toolTip = "Stop playback and remove the soundtrack"
         removeButton.target = self
         removeButton.action = #selector(removeTrack)
         addSubview(removeButton)
+
+        style(profileButton)
+        profileButton.setAccessibilityLabel("Cycle soundtrack profile")
+        profileButton.setAccessibilityHelp("Cycles through Default, Calm, Intense and Trailer Cue")
+        profileButton.target = self
+        profileButton.action = #selector(cycleProfile)
+        setProfile(title: "Default")
+        addSubview(profileButton)
     }
 
     required init?(coder: NSCoder) { nil }
+
+    private func style(_ button: NSButton) {
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.backgroundColor = color(0.12, 0.20, 0.25, 0.68).cgColor
+        button.layer?.borderColor = color(0.47, 0.70, 0.76, 0.30).cgColor
+        button.layer?.borderWidth = 0.5
+        button.layer?.cornerRadius = 5
+    }
+
+    func setProfile(title: String) {
+        profileButton.attributedTitle = NSAttributedString(string: "\(title)  ↻", attributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: color(0.78, 0.91, 0.94)
+        ])
+        profileButton.setAccessibilityValue(title)
+        profileButton.toolTip = "Click to cycle the soundtrack profile (currently \(title))"
+    }
 
     func setTrack(name: String, waveform: [Float]) {
         nameLabel.stringValue = name
@@ -53,13 +76,15 @@ final class SoundtrackWaveform: NSView {
 
     override func layout() {
         super.layout()
-        nameLabel.frame = NSRect(x: 12, y: bounds.height - 22, width: waveRect.width, height: 15)
-        removeButton.frame = NSRect(x: bounds.width - 36, y: floor((bounds.height - 26) / 2), width: 26, height: 26)
+        let removeFrame = NSRect(x: bounds.width - 32, y: bounds.height - rowInset - 17, width: 23, height: 17)
+        nameLabel.frame = NSRect(x: 12, y: removeFrame.minY + 1, width: max(0, removeFrame.minX - 20), height: 15)
+        removeButton.frame = removeFrame
+        profileButton.frame = profileFrame
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
-        return hit === removeButton ? hit : nil
+        return hit === removeButton || hit === profileButton ? hit : nil
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -97,8 +122,15 @@ final class SoundtrackWaveform: NSView {
         }
     }
 
+    private var rowInset: CGFloat { bounds.height < 48 ? 4 : 7 }
+
+    private var profileFrame: NSRect {
+        let height: CGFloat = bounds.height < 48 ? 17 : 20
+        return NSRect(x: bounds.width - 91, y: rowInset, width: 82, height: height)
+    }
+
     private var waveRect: NSRect {
-        NSRect(x: 12, y: 8, width: max(0, bounds.width - 56), height: max(0, bounds.height - 32))
+        NSRect(x: 12, y: profileFrame.minY + 2, width: max(0, profileFrame.minX - 20), height: profileFrame.height - 4)
     }
 
     private func makeWaveformPath(in rect: CGRect) -> CGPath {
@@ -123,4 +155,5 @@ final class SoundtrackWaveform: NSView {
     }
 
     @objc private func removeTrack() { onRemove?() }
+    @objc private func cycleProfile() { onCycleProfile?() }
 }

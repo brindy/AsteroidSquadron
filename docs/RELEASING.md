@@ -53,10 +53,13 @@ The publisher verifies the recorded SHA-256 values, Apple acceptance receipts, a
 ## Local development builds
 
 ```sh
-./scripts/build.sh                                  # Apple Silicon, ad hoc signature
+./scripts/build.sh                                  # Apple Silicon, uses the sole local Developer ID if available
+./scripts/build.sh --sign -                         # Explicit ad hoc signature
 ./scripts/build.sh --output 'build/test/Asteroid Squadron.app'
 ./scripts/package.sh 'build/test/Asteroid Squadron.app' build/package-test
 ```
+
+The build helper uses a Developer ID certificate when exactly one is installed, keeping the app's Screen Recording identity stable across local rebuilds. Pass `--sign` explicitly to choose among several identities. Without a unique certificate it uses an ad hoc signature, whose recording permission can need renewal after each rebuild.
 
 `package.sh` only creates and verifies a disk image. It does **not** notarize it. Local ad hoc builds are for testing, not the signed public download.
 

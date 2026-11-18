@@ -45,10 +45,42 @@ private func verifySoundtrackAnalysis(in directory: URL) throws {
     func nearby(_ seconds: Double, in analysis: SoundtrackAnalysis, tolerance: Double = 0.14) -> Bool {
         analysis.cues.contains { abs($0.time - seconds) <= tolerance }
     }
+    func profiledAnalysis(of file: URL, matching baseline: SoundtrackAnalysis) throws -> [SoundtrackProfile: SoundtrackAnalysis] {
+        let profiles = try SoundtrackAnalysis.analyzeProfiles(url: file)
+        requireSoundtrack(Set(profiles.keys) == Set(SoundtrackProfile.allCases), "Analysis did not provide every soundtrack profile")
+        requireSoundtrack(profiles[.default]?.cues == baseline.cues, "Default profile changed the existing soundtrack cues")
+        requireSoundtrack(profiles.values.allSatisfy { $0.duration == baseline.duration && $0.waveform == baseline.waveform },
+                          "Changing the cue profile changed the track duration or waveform")
+        return profiles
+    }
     requireSoundtrack(pianoAttacks.filter { nearby($0, in: quiet) }.count >= 4,
                       "Quiet piano attacks were missed or noticeably late: \(quiet.cues.map(\.time))")
     requireSoundtrack(pianoAttacks.filter { nearby($0, in: quiet) && nearby($0, in: amplified) }.count >= 4,
                       "The same soft and amplified tracks produced different edit timing")
+    let calm = try profiledAnalysis(of: quietFile, matching: quiet)[.calm]!
+    requireSoundtrack(pianoAttacks.filter { nearby($0, in: calm) }.count >= 4,
+                      "Calm missed the expressive attacks on a quiet recording: \(calm.cues.map(\.time))")
+    // Put a quiet melody above a steady accompaniment and between louder notes.
+    let softNotes = [3.5, 8.25]
+    let dynamicNotes: [(start: Double, gain: Double, frequency: Double)] = [
+        (0.6, 0.15, 230), (softNotes[0], 0.000095, 347), (6.0, 0.20, 186),
+        (softNotes[1], 0.0000855, 440), (10.8, 0.21, 240)
+    ]
+    let dynamicFile = try writeSoundtrackFixture(named: "Piano Under Accompaniment", duration: 12, into: directory) { time, _ in
+        let accompaniment = 0.016 * sin(time * 2 * .pi * 140)
+        return dynamicNotes.reduce(accompaniment) { mix, note in
+            let age = time - note.start
+            guard age >= 0 && age < 6 else { return mix }
+            let phase = age * note.frequency * 2 * .pi
+            let attack = min(1, age / 0.014)
+            let tone = sin(phase) * exp(-age * 4) + 0.3 * sin(2 * phase) * exp(-age * 8.7)
+            return mix + note.gain * tone * attack
+        }
+    }
+    let dynamicProfiles = try SoundtrackAnalysis.analyzeProfiles(url: dynamicFile)
+    let dynamicDefault = dynamicProfiles[.default]!, dynamicCalm = dynamicProfiles[.calm]!
+    requireSoundtrack(softNotes.contains { nearby($0, in: dynamicCalm) && !nearby($0, in: dynamicDefault) },
+                      "Calm failed to find a soft note obscured by accompaniment: \(dynamicCalm.cues.map(\.time))")
 
     // A thick guitar bed and constant short attacks should still yield room to hold a shot.
     let denseAccents = [2.4, 5.6, 8.8, 12.0, 15.2]
@@ -71,6 +103,12 @@ private func verifySoundtrackAnalysis(in directory: URL) throws {
                       "Dense music hid its main accents: \(dense.cues.map(\.time))")
     requireSoundtrack(dense.cues.count <= 23 && zip(dense.cues, dense.cues.dropFirst()).allSatisfy { $1.time - $0.time >= 0.77 },
                       "Sustained percussion generated too many neighboring edits")
+    let intense = try profiledAnalysis(of: denseFile, matching: dense)[.intense]!
+    requireSoundtrack(denseAccents.filter { nearby($0, in: intense) }.count >= 3,
+                      "Intense suppressed the main accents along with the repeated percussion: \(intense.cues.map(\.time))")
+    requireSoundtrack(intense.cues.count < dense.cues.count &&
+                      zip(intense.cues, intense.cues.dropFirst()).allSatisfy { $1.time - $0.time >= 1.5 },
+                      "Intense did not leave more room between edits in the dense track")
 
     let dropTime = 7.75
     let impactTime = 12.0
@@ -94,11 +132,17 @@ private func verifySoundtrackAnalysis(in directory: URL) throws {
                       "The trailer build and re-entry did not produce a timed drop: \(trailer.cues)")
     requireSoundtrack(trailer.cues.contains { abs($0.time - impactTime) < 0.16 && $0.kind == .impact },
                       "Bass impact did not produce a timed impact: \(trailer.cues)")
+    let trailerCue = try profiledAnalysis(of: trailerFile, matching: trailer)[.trailerCue]!
+    requireSoundtrack(trailerCue.cues.contains { abs($0.time - dropTime) < 0.16 && $0.kind == .drop } &&
+                      trailerCue.cues.contains { abs($0.time - impactTime) < 0.16 && $0.kind == .impact },
+                      "Trailer Cue failed to mark both the main drop and bass impact: \(trailerCue.cues)")
+    requireSoundtrack(trailerCue.cues.count < trailer.cues.count, "Trailer Cue did not filter the quieter accents in the build-up")
 
     let silenceFile = try writeSoundtrackFixture(named: "Silence", duration: 2, into: directory) { _, _ in 0 }
     let silence = try SoundtrackAnalysis.analyze(url: silenceFile)
-    requireSoundtrack(silence.cues.isEmpty, "Silence generated soundtrack cues")
-    for result in [quiet, amplified, dense, trailer] {
+    let silenceProfiles = try profiledAnalysis(of: silenceFile, matching: silence)
+    requireSoundtrack(silenceProfiles.values.allSatisfy { $0.cues.isEmpty }, "Silence generated soundtrack cues")
+    for result in [quiet, amplified, dense, trailer, calm, intense, trailerCue] {
         requireSoundtrack(abs(result.duration - duration) < 0.02, "The soundtrack duration changed during analysis")
         requireSoundtrack(result.cues.allSatisfy {
             (0..<duration).contains($0.time) && (0...1).contains($0.strength)
@@ -109,7 +153,7 @@ private func verifySoundtrackAnalysis(in directory: URL) throws {
     var cancelled = false
     var cancellationChecks = 0
     do {
-        _ = try SoundtrackAnalysis.analyze(url: denseFile) {
+        _ = try SoundtrackAnalysis.analyzeProfiles(url: denseFile) {
             cancellationChecks += 1
             return cancellationChecks >= 3
         }
@@ -118,6 +162,7 @@ private func verifySoundtrackAnalysis(in directory: URL) throws {
     }
     requireSoundtrack(cancelled, "Replacing a track could not interrupt in-progress audio analysis")
     print("PASS: quiet piano, gain changes, dense music, trailer drops and impacts, silence, and analysis cancellation.")
+    print("PASS: Default cues match, Calm finds quiet notes, Intense spaces out dense edits, and Trailer Cue retains the drop and impact.")
 }
 
 private func verifySoundtrackTiming() {

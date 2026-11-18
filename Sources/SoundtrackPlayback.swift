@@ -23,7 +23,7 @@ final class SoundtrackPlayback: NSObject, AVAudioPlayerDelegate {
     struct Track {
         let id = UUID()
         let url: URL
-        let analysis: SoundtrackAnalysis
+        let analyses: [SoundtrackProfile: SoundtrackAnalysis]
         let duration: TimeInterval
     }
 
@@ -56,10 +56,12 @@ final class SoundtrackPlayback: NSObject, AVAudioPlayerDelegate {
     private var wantsPlayback = false
 
     private(set) var loadingURL: URL?
+    private(set) var profile: SoundtrackProfile = .default
     var onChange: (() -> Void)?
     var onError: ((URL, Error) -> Void)?
 
     var track: Track? { prepared?.info }
+    var analysis: SoundtrackAnalysis? { track?.analyses[profile] }
     var isPlaying: Bool { prepared?.player.isPlaying ?? false }
     var position: TimeInterval? { prepared?.player.currentTime }
 
@@ -92,8 +94,8 @@ final class SoundtrackPlayback: NSObject, AVAudioPlayerDelegate {
                 guard player.duration.isFinite, player.duration > 0 else { throw PlaybackError.invalidAudio }
                 player.numberOfLoops = -1
                 player.volume = 0.65
-                let analysis = try SoundtrackAnalysis.analyze(url: source.url, isCancelled: { operation.isCancelled })
-                let info = Track(url: source.url, analysis: analysis, duration: player.duration)
+                let analyses = try SoundtrackAnalysis.analyzeProfiles(url: source.url, isCancelled: { operation.isCancelled })
+                let info = Track(url: source.url, analyses: analyses, duration: player.duration)
                 return PreparedTrack(info: info, source: source, player: player)
             }
             guard !operation.isCancelled else { return }
@@ -111,6 +113,12 @@ final class SoundtrackPlayback: NSObject, AVAudioPlayerDelegate {
         pendingLoad = nil
         loadingURL = nil
         discardPlayer()
+        onChange?()
+    }
+
+    func selectProfile(_ profile: SoundtrackProfile) {
+        guard profile != self.profile else { return }
+        self.profile = profile
         onChange?()
     }
 

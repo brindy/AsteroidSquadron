@@ -30,7 +30,9 @@ Fighters with no active enemy plan long patrol legs through the belt and around 
 
 The Babylon jump windows have opaque black interiors and animated blue spiral eddies. World-space clipping on the travelling hulls hides all geometry still in hyperspace, including from side and rear cameras; it reverses on capital departure. Starfury clipping is released once the complete fighter clears the aperture, so later manoeuvres remain unaffected. Starfuries emerge in staggered lanes without individual warp trails; their window closes as the group flies away. The Shadow capital physically emerges through its aperture, deploys its fighters, and immediately moves into a new departure aperture in the same camera scene. Both jump windows are removed after the visit. A wide reveal shows the complete opening, followed by a close fighter launch and pullback; the Shadow shot reserves space for the departure window and uses a lateral angle to keep its black core from hiding the capital. Both deployments retain the nearest-existing-fighter handoff. All nine factions participate in the same random replacement pool.
 
-The automatic director prioritizes a wide view of the connected dogfight, including wingmen around its edges. It holds that view instead of cycling cameras on a timer, selects clearer sight lines through the asteroids, and avoids foreground boulders dominating the frame. Short highlights cover critical attack runs against weakened targets, explosions, impending asteroid strikes, and loss of control, then return to at least ten seconds of wide coverage. An attack shot follows its target into the explosion without another cut. Arrivals retain their dedicated sequences. All six camera styles remain available manually; disabling Auto preserves manual control.
+The automatic director prioritizes a wide view of the connected dogfight, including wingmen around its edges. It holds that view instead of cycling cameras on a timer, selects clearer sight lines through the asteroids, and avoids foreground boulders dominating the frame. Short highlights cover critical attack runs against weakened targets, explosions, impending asteroid strikes, and loss of control, then return to at least ten seconds of wide coverage. Attack coverage follows the target into its explosion. Arrivals retain their dedicated sequences. All six camera styles remain available manually; disabling Auto preserves manual control.
+
+Some close pursuits briefly move into the attacker's cockpit, with faction-specific canopy framing, instruments and sights. The view follows the pilot's position and bank, stays forward-facing and returns to the battlefield after a few seconds or when the target leaves the forward view.
 
 Capital deployments start with a wide arrival reveal, then cut close to the first fighter. As the squadron emerges, the camera physically pulls back on a fixed lens, shifts its attention smoothly to the fighter group, and reveals the full capital ship behind it. Framing uses the actual hull silhouette and current window aspect ratio. The same continuous shot follows the group through the final launch and the capital ship's immediate departure; it does not chase the capital ship into hyperspace. After departure, a brief over-shoulder shot uses the nearest surviving fighter that was already present at the capital ship's arrival, with its camera trained on the incoming squadron. It keeps that pilot in the foreground for 3.5 seconds before returning wide. A destroyed anchor is replaced by another existing survivor; if none remain, the director returns straight to the battlefield view. New roster generations cannot be mistaken for an existing pilot. The battlefield view selects a busy group of live ships and fits its framing to their positions; separated inbound squadrons get their own readable composition instead of an empty view of the belt.
 
@@ -99,6 +101,7 @@ On launch, the app starts `/usr/bin/caffeinate -d -i -w <app-pid>`. This prevent
 | Space / P | Pause or resume flight (keeps awake) |
 | Flight → Pause When Unfocused | Automatically pause when the simulation window loses focus. Enabled by default and saved across launches. |
 | ⌘O / Soundtrack → Choose Audio File | Load, analyse, and loop a local soundtrack |
+| M / profile button on the waveform | Cycle Default, Calm, Intense and Trailer Cue |
 | × on the waveform / Soundtrack → Remove Soundtrack | Stop playback and return to the action-only camera |
 | H / U | Hide or show overlay |
 | K | Toggle keep awake |
@@ -107,12 +110,18 @@ On launch, the app starts `/usr/bin/caffeinate -d -i -w <app-pid>`. This prevent
 | T | Wipe into a random new sector immediately |
 | S | Queue an Atlantis siege for the next victory |
 | B | Generate another biome in a planet sector |
+| V / Flight → Start or Stop Recording | Capture the window and soundtrack to an MP4. Choose where to save it after stopping. |
+| Window → Resolution / Aspect Ratio | Choose exact recording dimensions or fit an aspect ratio to the current display |
 | ? | Help |
 | ⌘Q | Quit and release this app's keep-awake assertions |
 
 The overlay dims after nine seconds without mouse movement; move the pointer to restore it. Window size and position are remembered.
 
-The soundtrack is optional and selected for the current session. Choose an MP3, WAV, M4A, AIFF, FLAC, CAF, or another audio format macOS can decode. Analysis runs locally in the background. The waveform at the bottom shows playback progress. The automatic camera uses changes in energy, bass, and attack relative to the surrounding music, so quiet notes can count and dense percussion still leaves time to hold a shot. When a strong cue is close to a planned arrival, the scheduler can hold the arrival for up to 1.8 seconds before staging it. The carrier sequence, fighter handoff, sector changes and Atlantis shots take priority over music cuts. Flight pause also pauses playback. Turn off **Automatic Camera Cuts** to listen with manual camera control.
+The soundtrack is optional and selected for the current session. Choose an MP3, WAV, M4A, AIFF, FLAC, CAF, or another audio format macOS can decode. Analysis runs locally in the background. The waveform at the bottom shows playback progress. Under **Soundtrack → Analysis Profile**, select **Default** for general use, **Calm** to pick up softer notes and phrase changes, **Intense** for standout accents in dense music like techno or metal, or **Trailer Cue** for buildups, drops and heavy impacts. You can change the profile while the track plays.
+
+When a strong cue is close to a planned arrival, the scheduler can hold the arrival for up to 1.8 seconds before staging it. The carrier sequence, fighter handoff, sector changes and Atlantis shots take priority over music cuts. Flight pause also pauses playback. Turn off **Automatic Camera Cuts** to listen with manual camera control.
+
+Press **V** to record the flight window and its audio, then press **V** again or use **Stop Recording** in the pulsing menu bar icon. macOS 14.4 and later use app-only window capture. Earlier macOS versions request Screen Recording permission on the first attempt. Capture includes Asteroid Squadron’s audio only. The app locks the window size during capture. By default it records the window at its backing pixel size; a fixed **Window → Resolution** preset gives that exact output size. **Aspect Ratio** presets use as much of the current display’s usable area as possible. Changing the window size manually restores capture at the window’s backing pixel size.
 
 ## Verification
 
@@ -120,6 +129,8 @@ The soundtrack is optional and selected for the current session. Choose an MP3, 
 ./scripts/build.sh
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-simulation
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-soundtrack
+"build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-cockpit
+"build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --render-cockpit-review build/cockpit-review
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-veterans
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --render-veteran-review build/veteran-review
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-babylon
