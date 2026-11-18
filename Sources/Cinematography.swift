@@ -62,6 +62,7 @@ final class CinematicDirector {
     var dangerCuts = 0
     var normalCuts = 0
     var hardCuts = 0
+    private(set) var soundtrackCuts = 0
     var lastDangerTime: Float = -20
     var atlantisLookout: AtlantisLookout?
     private var nextAtlantisPier = false
@@ -262,6 +263,22 @@ final class CinematicDirector {
                 return
             }
         }
+    }
+    private func considerSoundtrack(in b: Dogfight) {
+        // Consume the cue even when the current sequence has priority.
+        guard let cue = b.soundtrackTiming?.takeCutCue(), b.automatic, event == .none, !b.cut,
+              !b.showingSector, b.sectorDeparture == nil, b.atlantisAttackingSide == nil,
+              b.atlantis?.intact != true, !b.returningFromAtlantis, b.activeCount>0 else { return }
+        let minimum: Float = cue.kind == .drop ? 2.6 : (cue.kind == .impact ? 3.3 : 4.4)
+        guard b.cameraAge>=minimum else { return }
+        let imminent = b.time+2
+        guard !b.carriers.contains(where:{ $0.start<=imminent }),
+              !b.fleetRequests.contains(where:{ $0.countdown<=2 }) else { return }
+        if let flight = arrivalFlight, flight.start>coveredFlight, flight.start<=imminent { return }
+        let angles = [3,0,5]
+        let angle = b.cameraIndex == 2 ? angles[(soundtrackCuts/2)%angles.count] : 2
+        b.selectCamera(angle)
+        soundtrackCuts += 1
     }
     func endEvent(in b: Dogfight, follow index: Int? = nil) {
         begin(.none,in:b)
@@ -577,6 +594,7 @@ final class CinematicDirector {
             considerAtlantisCoverage(in:b)
             considerCriticalMoment(in:b)
         }
+        if dt>0 { considerSoundtrack(in:b) }
         let up = V3(0,1,0)
         var desired = b.cameraPosition, look = b.cameraLook
         var fov: Float = 51
@@ -857,8 +875,11 @@ extension Dogfight {
         }
     }
     func nextCamera() {
+        selectCamera((cameraIndex+1)%cameraNames.count)
+    }
+    func selectCamera(_ index: Int) {
         director.begin(.none,in:self)
-        cameraIndex = (cameraIndex+1)%cameraNames.count
+        cameraIndex = index
         cameraAge = 0; cut = true; wreckHold = 0
         selectCameraSubject(); director.prepareShot(in:self)
         cameraChanged?()

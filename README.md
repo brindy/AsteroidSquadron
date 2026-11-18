@@ -1,6 +1,6 @@
 # Asteroid Squadron
 
-A standalone macOS app: an endless crossover dogfight between Star Wars, the reimagined Battlestar Galactica, Babylon 5 and Stargate in a procedural 3D asteroid belt. An action-directed camera system, faction-specific weapons, turbulent explosions that cool into smoke, formation arrivals, capital-ship hangar launches, drifting volumetric gas, rotating sector landmarks, and a quiet cinematic overlay. All ship meshes, geometry, density fields, and textures are generated locally. No dependencies, downloads, network access, or audio.
+A standalone macOS app: an endless crossover dogfight between Star Wars, the reimagined Battlestar Galactica, Babylon 5 and Stargate in a procedural 3D asteroid belt. An action-directed camera system, faction-specific weapons, turbulent explosions that cool into smoke, formation arrivals, capital-ship hangar launches, drifting volumetric gas, rotating sector landmarks, and a quiet cinematic overlay. All ship meshes, geometry, density fields, and textures are generated locally. No dependencies, downloads, or network access.
 
 Every launch chooses a fresh random seed for asteroid placement and shapes, cloud positions and density, landmark placement, flight orientation, and the initial pair of opposing factions. **R** generates another arena and faction pairing without interrupting keep-awake. For a reproducible run, launch with `--seed 42` (any unsigned 64-bit decimal integer).
 
@@ -98,6 +98,8 @@ On launch, the app starts `/usr/bin/caffeinate -d -i -w <app-pid>`. This prevent
 | Escape | Leave full screen |
 | Space / P | Pause or resume flight (keeps awake) |
 | Flight → Pause When Unfocused | Automatically pause when the simulation window loses focus. Enabled by default and saved across launches. |
+| ⌘O / Soundtrack → Choose Audio File | Load, analyse, and loop a local soundtrack |
+| Soundtrack → Remove Soundtrack | Stop playback and return to the action-only camera |
 | H / U | Hide or show overlay |
 | K | Toggle keep awake |
 | J | Toggle 30 / 60 fps |
@@ -109,11 +111,14 @@ On launch, the app starts `/usr/bin/caffeinate -d -i -w <app-pid>`. This prevent
 
 The overlay dims after nine seconds without mouse movement; move the pointer to restore it. Window size and position are remembered.
 
+The soundtrack is optional and selected for the current session. Choose an MP3, WAV, M4A, AIFF, FLAC, CAF, or another audio format macOS can decode. Analysis runs locally in the background. The automatic camera uses changes in energy, bass, and attack relative to the surrounding music, so quiet notes can count and dense percussion still leaves time to hold a shot. When a strong cue is close to a planned arrival, the scheduler can hold the arrival for up to 1.8 seconds before staging it. The carrier sequence, fighter handoff, sector changes and Atlantis shots take priority over music cuts. Flight pause also pauses playback. Turn off **Automatic Camera Cuts** to listen with manual camera control.
+
 ## Verification
 
 ```sh
 ./scripts/build.sh
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-simulation
+"build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-soundtrack
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-veterans
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --render-veteran-review build/veteran-review
 "build/Asteroid Squadron.app/Contents/MacOS/AsteroidSquadron" --verify-babylon

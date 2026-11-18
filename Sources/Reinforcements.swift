@@ -169,7 +169,9 @@ extension Dogfight {
     func deploySquadron(_ squadron: [Int], side: Int, lane: ArrivalLane? = nil) {
         guard !squadron.isEmpty else { return }
         let faction = sideFactions[side]
-        let start = max(time,nextArrivalTime)
+        let earliest = max(time,nextArrivalTime)
+        let delay = automatic ? soundtrackTiming?.arrivalDelay(untilReveal:Double(earliest-time)+faction.soundtrackRevealOffset) : nil
+        let start = earliest+Float(delay ?? 0)
         nextArrivalTime = start+(faction == .shadow ? 7.2 : 6.5)
         waveNumber += 1
         let approach = lane ?? arrivalLane(for:faction,side:side)

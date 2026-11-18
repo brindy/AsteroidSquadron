@@ -75,7 +75,8 @@ extension Dogfight {
         let first = factions.remove(at:roster.index(factions.count))
         let next = Dogfight(seed:nextSeed,initialFactions:[first,factions[roster.index(factions.count)]],
                             firstAtlantisEncounter:nil,landmark:backdrop.kind,
-                            sectorWaveLimit:backdrop.waves,sectorEstablishingUntil:SectorDeparture.establishingDuration)
+                            sectorWaveLimit:backdrop.waves,sectorEstablishingUntil:SectorDeparture.establishingDuration,
+                            soundtrackTiming:automatic ? soundtrackTiming : nil)
         next.aceKillRecord = aceKillRecord
         next.acesEmerged = acesEmerged
         next.longestEncounterStreak = longestEncounterStreak
