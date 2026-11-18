@@ -124,6 +124,8 @@ final class SoundtrackPlayback: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    func rewind() { prepared?.player.currentTime = 0 }
+
     private func finishLoading(_ result: Result<PreparedTrack, Error>, url: URL) {
         pendingLoad = nil
         loadingURL = nil

@@ -15,6 +15,13 @@ struct SoundtrackCue: Equatable, Sendable {
 struct SoundtrackAnalysis: Sendable {
     let duration: TimeInterval
     let cues: [SoundtrackCue]
+    let waveform: [Float]
+
+    init(duration: TimeInterval, cues: [SoundtrackCue], waveform: [Float] = []) {
+        self.duration = duration
+        self.cues = cues
+        self.waveform = waveform
+    }
 
     static func analyze(url: URL, isCancelled: () -> Bool = { false }) throws -> SoundtrackAnalysis {
         try checkCancellation(isCancelled)
@@ -27,18 +34,20 @@ struct SoundtrackAnalysis: Sendable {
         let spectrum = try SoundtrackSpectrum(sampleRate: format.sampleRate, channels: Int(format.channelCount))
         var features: [SoundtrackFrame] = []
         let frameCount = file.length
+        var envelope = SoundtrackEnvelope(frameCount: frameCount, channels: min(Int(format.channelCount), 8))
         while AVAudioFramePosition(spectrum.sampleCount) < frameCount {
             try checkCancellation(isCancelled)
             try file.read(into: buffer)
             if buffer.frameLength == 0 { break }
             guard let channels = buffer.floatChannelData else { throw AnalysisError.invalidAudio }
+            envelope.append(channels, count: Int(buffer.frameLength))
             spectrum.append(channels, count: Int(buffer.frameLength), to: &features)
             if buffer.frameLength < buffer.frameCapacity { break }
         }
         guard spectrum.sampleCount > 0 else { throw AnalysisError.emptyAudio }
         let duration = Double(spectrum.sampleCount) / format.sampleRate
         let cues = try editCues(in: features, step: spectrum.step, duration: duration, isCancelled: isCancelled)
-        return SoundtrackAnalysis(duration: duration, cues: cues)
+        return SoundtrackAnalysis(duration: duration, cues: cues, waveform: envelope.waveform)
     }
 
     private static func checkCancellation(_ isCancelled: () -> Bool) throws {
@@ -170,6 +179,65 @@ struct SoundtrackAnalysis: Sendable {
     private static func quantile(_ values: [Float], _ percentile: Double) -> Float {
         let sorted = values.sorted()
         return sorted[Int(Double(sorted.count - 1) * percentile)]
+    }
+}
+
+private struct SoundtrackEnvelope {
+    private struct Bin {
+        var peak: Float = 0
+        var energy: Double = 0
+        var frames = 0
+    }
+
+    private let frameCount: AVAudioFramePosition
+    private let channels: Int
+    private var bins: [Bin]
+    private var index = 0
+    private var processed: AVAudioFramePosition = 0
+    private var end: AVAudioFramePosition = 0
+
+    init(frameCount: AVAudioFramePosition, channels: Int) {
+        self.frameCount = frameCount
+        self.channels = channels
+        bins = Array(repeating: Bin(), count: Int(max(0, min(frameCount, 192))))
+        end = boundary(after: 0)
+    }
+
+    mutating func append(_ input: UnsafePointer<UnsafeMutablePointer<Float>>, count: Int) {
+        var offset = 0
+        while offset < count {
+            let length = index < bins.count - 1 ? min(count - offset, Int(end - processed)) : count - offset
+            for channel in 0..<channels {
+                let samples = input[channel].advanced(by: offset)
+                var peak: Float = 0, energy: Float = 0
+                vDSP_maxmgv(samples, 1, &peak, vDSP_Length(length))
+                vDSP_svesq(samples, 1, &energy, vDSP_Length(length))
+                if peak.isFinite { bins[index].peak = max(bins[index].peak, min(8, peak)) }
+                if energy.isFinite { bins[index].energy += min(64 * Double(length), Double(energy)) }
+            }
+            bins[index].frames += length
+            processed += AVAudioFramePosition(length)
+            offset += length
+            if processed >= end, index < bins.count - 1 {
+                index += 1
+                end = boundary(after: index)
+            }
+        }
+    }
+
+    var waveform: [Float] {
+        let levels = bins.prefix(while: { $0.frames > 0 }).map { bin in
+            let rms = Float(sqrt(bin.energy / (Double(bin.frames) * Double(channels))))
+            return 0.6 * rms + 0.4 * bin.peak
+        }
+        let reference = max(0.00001, levels.max() ?? 0)
+        return levels.map { pow($0 / reference, 0.58) }
+    }
+
+    private func boundary(after index: Int) -> AVAudioFramePosition {
+        let count = AVAudioFramePosition(max(1, bins.count))
+        let boundary = AVAudioFramePosition(index + 1)
+        return (frameCount / count) * boundary + (frameCount % count) * boundary / count
     }
 }
 

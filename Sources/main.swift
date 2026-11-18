@@ -349,6 +349,7 @@ final class Dogfight {
     var encountersCompleted = 0
     var atlantis: Atlantis?
     var nextAtlantisEncounter: Int?
+    var manualAtlantisSiegeQueued = false
     var atlantisRandom: Random
     var atlantisAttackingSide: Int?
     var atlantisTopUpPending = false
@@ -913,6 +914,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var soundtrackTrackID: UUID?
     private var soundtrackStatus: NSMenuItem!
     private var removeSoundtrackItem: NSMenuItem!
+    private var soundtrackWaveform: SoundtrackWaveform!
     var timer: Timer?
     var lastTime = ProcessInfo.processInfo.systemUptime
     var lastActivity = ProcessInfo.processInfo.systemUptime
@@ -1049,6 +1051,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menuView.addItem(withTitle:"Toggle 30 / 60 FPS",action:#selector(toggleQuality),keyEquivalent:"j")
         menuView.addItem(withTitle:"Generate New Arena",action:#selector(newArena),keyEquivalent:"r")
         menuView.addItem(withTitle:"Transition to Next Sector",action:#selector(transitionSector),keyEquivalent:"t")
+        menuView.addItem(withTitle:"Queue Atlantis Siege",action:#selector(queueAtlantisSiege),keyEquivalent:"s")
         menuView.addItem(withTitle:"Next Planet Biome",action:#selector(nextBiome),keyEquivalent:"b")
         viewItem.submenu = menuView
         for item in menu.items+menuView.items { if item.action != nil && item.action != #selector(NSApplication.hide(_:)) && item.action != #selector(NSApplication.terminate(_:)) { item.target = self } }
@@ -1081,6 +1084,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if track?.id != soundtrackTrackID {
             soundtrackTrackID = track?.id
             battle.soundtrackTiming = track.map { SoundtrackTiming(analysis:$0.analysis) }
+            if let track {
+                soundtrackWaveform.setTrack(name:track.url.lastPathComponent,waveform:track.analysis.waveform)
+            }
+            soundtrackWaveform.progress = 0
+            soundtrackWaveform.isHidden = track == nil
+            layoutBottomHUD()
+            showControls()
         }
         if let loading = soundtrack.loadingURL {
             soundtrackStatus.title = "Analyzing \(loading.lastPathComponent)…"
@@ -1126,8 +1136,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         eventStatus.alignment = .right
         place(eventStatus,x:w-390,y:h-101,width:352,height:16,mask:[.minXMargin,.minYMargin])
         cameraTitle = label("",size:21,weight:.light,color:color(0.9,0.95,0.94))
+        cameraTitle.lineBreakMode = .byTruncatingTail
         place(cameraTitle,x:38,y:48,width:420,height:30)
         cameraDetail = label("",size:9,color:cyan,mono:true)
+        cameraDetail.lineBreakMode = .byTruncatingTail
         place(cameraDetail,x:39,y:27,width:430,height:17)
         aceHistory = label("",size:10,color:color(0.8,0.66,0.4),mono:true)
         aceHistory.toolTip = "Distinct pilots who have held the sole Ace title, and the most completed enemy encounters survived by any one pilot across sectors. Records remain after a pilot is lost; using R to reset the arena clears them."
@@ -1146,9 +1158,29 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         place(full,x:w-148,y:38,width:44,height:34,mask:[.minXMargin])
         let help = button("?",action:#selector(showHelp),tooltip:"Controls & information (?)")
         place(help,x:w-92,y:38,width:54,height:34,mask:[.minXMargin])
-        hint = label("C  CAMERA     F  FULL SCREEN     SPACE  PAUSE     T  NEXT SECTOR     ?  HELP",size:9,color:color(0.4,0.55,0.59),mono:true)
+        soundtrackWaveform = SoundtrackWaveform(frame:.zero)
+        soundtrackWaveform.isHidden = true
+        soundtrackWaveform.onRemove = { [weak self] in self?.removeSoundtrack() }
+        overlay.addSubview(soundtrackWaveform)
+        hint = label("C  CAMERA     F  FULL SCREEN     SPACE  PAUSE     T  SECTOR     S  SIEGE     ?  HELP",size:9,color:color(0.4,0.55,0.59),mono:true)
         hint.alignment = .right
         place(hint,x:w-680,y:108,width:642,height:17,mask:[.minXMargin])
+    }
+    private func layoutBottomHUD() {
+        guard let soundtrackWaveform, let autoButton else { return }
+        guard !soundtrackWaveform.isHidden else {
+            cameraTitle.setFrameSize(NSSize(width:420,height:30))
+            cameraDetail.setFrameSize(NSSize(width:430,height:17))
+            return
+        }
+        let left = cameraTitle.frame.minX
+        let right = autoButton.frame.minX
+        let titleWidth = min(340,max(0,(right-left)*0.47))
+        cameraTitle.setFrameSize(NSSize(width:titleWidth,height:30))
+        cameraDetail.setFrameSize(NSSize(width:titleWidth-1,height:17))
+        let gapStart = left+titleWidth+16, gapEnd = right-16
+        let width = max(0,min(350,gapEnd-gapStart))
+        soundtrackWaveform.frame = NSRect(x:((gapStart+gapEnd-width)/2).rounded(),y:29,width:width,height:52)
     }
     func startTimer() {
         timer?.invalidate(); lastTime = ProcessInfo.processInfo.systemUptime
@@ -1164,7 +1196,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let visible = window.occlusionState.contains(.visible) && !window.isMiniaturized
         let sectorFrameReady = !openingSector || !visible || view.frames.rendered(battle.scene)
         soundtrack.setPlaying(!battle.paused && sectorFrameReady)
-        let musicPosition = soundtrack.isPlaying && sectorWipe == nil ? soundtrack.position : nil
+        let position = soundtrack.position
+        if let position, let track = soundtrack.track {
+            soundtrackWaveform.progress = position/track.duration
+        }
+        let musicPosition = soundtrack.isPlaying && sectorWipe == nil ? position : nil
         battle.soundtrackTiming?.observe(position:musicPosition)
         if !battle.paused {
             if sectorFrameReady {
@@ -1205,6 +1241,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 eventStatus.textColor = orange
             } else if battle.atlantisAttackingSide != nil {
                 eventStatus.stringValue = "SQUADRON TOP-UP   /   ATLANTIS APPROACHING"
+                eventStatus.textColor = cyan
+            } else if battle.manualAtlantisSiegeQueued {
+                eventStatus.stringValue = "ATLANTIS SIEGE QUEUED   /   AFTER NEXT VICTORY"
                 eventStatus.textColor = cyan
             } else if let request = battle.fleetRequests.min(by:{$0.countdown<$1.countdown}) {
                 eventStatus.stringValue = String(format:"%@ INBOUND / ETA %02d SEC",battle.sideFactions[request.side].title,max(0,Int(ceil(request.countdown))))
@@ -1266,6 +1305,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case "j": toggleQuality()
         case "r": newArena()
         case "t": transitionSector()
+        case "s": queueAtlantisSiege()
         case "b": nextBiome()
         case "?", "/": showHelp()
         case "\u{1b}": if window.styleMask.contains(.fullScreen) { fullscreen() }
@@ -1273,6 +1313,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
     @objc func nextCamera() { battle.nextCamera(); showControls() }
+    @objc private func queueAtlantisSiege() {
+        battle.queueAtlantisSiege()
+        lastHUD = 0
+        showControls()
+    }
     @objc func toggleAutomatic() {
         battle.automatic.toggle(); battle.cameraAge = 0
         if battle.automatic { battle.director.endEvent(in:battle) }
@@ -1410,6 +1455,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showControls()
     }
     @objc func newArena() {
+        // Start the new battle and the existing soundtrack on the same tick.
+        soundtrack.setPlaying(false)
+        soundtrack.rewind()
+        soundtrackWaveform.progress = 0
+        battle.soundtrackTiming = soundtrack.track.map { SoundtrackTiming(analysis:$0.analysis) }
+        if !battle.paused { battle.soundtrackTiming?.observe(position:0) }
         let seed = UInt64.random(in:1...UInt64.max)
         let backdrop = sectorBackdrops.next()
         let next = Dogfight(seed:seed,landmark:backdrop.kind,sectorWaveLimit:backdrop.waves,
@@ -1419,6 +1470,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sectorWipe = nil
         wipe.coverage = 0
         showBattle(next)
+        lastTime = ProcessInfo.processInfo.systemUptime
         aceStatus.stringValue = battle.aceHUDStatus
         showControls()
     }
@@ -1426,11 +1478,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "",.credits:NSAttributedString(string:"An endless, procedural crossover starfighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners.")])
     }
     @objc func showHelp() {
-        let alert = NSAlert()
-        alert.messageText = "Asteroid Squadron"
-        alert.informativeText = "Drag the scene to move the window.\nDouble-click the scene to fill / restore the desktop area.\n\nC / →   Next camera\nA          Wide battle / critical-moment director\nF          True full screen (Escape to leave)\nSpace   Pause / resume flight\nFlight → Pause When Unfocused   Pause automatically when the window loses focus\nH          Show / hide overlay\nK          Toggle keep awake\nJ           Switch 30 / 60 fps\nR          Generate a new random arena\nT          Wipe into the next sector immediately\nB          Generate the next biome in a planet sector\n⌘O       Choose a soundtrack for the automatic camera\n⌘Q       Quit and release keep awake\n\nWhen a faction loses its entire squadron, a different faction is randomly selected to replace it. Every 10–20 completed waves, the victorious squadron returns to its fleet. The next sector has a fresh belt around a planet, shattered moon, Babylon 5, the Death Star, a ringworld, a black hole, or a fleet graveyard. X-wings jump in formation; TIEs launch from an Imperial carrier. Colonial Vipers launch from Galactica and Cylon Raiders from a basestar. BSG capital ships blink into and out of space using FTL. Starfuries and the Shadow capital use blue-black jump windows. After two survived enemy encounters, squadrons replace their losses before the next opponent arrives. A pilot needs three survived encounters, six enemy kills, and a kill count above the previous Ace record. The current Ace carries a gold star. The title can stay vacant until the record is beaten. Without opponents, pilots patrol through and around the belt. Both squadrons attack Atlantis when it appears beyond the field. After its destruction, surviving fighters return to the belt. The HUD records distinct Ace pilots and the longest completed-encounter survival streak across sectors, even after pilots return home. R resets these records. The stars and galactic arms are an infinitely distant procedural skybox. Asteroid strikes can cause a recoverable spin or an explosion.\n\nKeep awake uses caffeinate -d -i while running, paused, or minimized. Closing the window quits and releases its assertions. Default: 30 fps. Soundtrack playback and analysis use local files.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners."
-        alert.addButton(withTitle:"Back to the dogfight")
-        alert.beginSheetModal(for:window) { [weak self] _ in self?.window.makeFirstResponder(self?.view) }
+        guard window.attachedSheet == nil else { return }
+        FlightHelp.present(attachedTo:window) { [weak self] in
+            guard let self else { return }
+            self.window.makeFirstResponder(self.view)
+        }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
@@ -1451,7 +1503,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillUseStandardFrame(_ window: NSWindow, defaultFrame newFrame: NSRect) -> NSRect {
         window.screen?.visibleFrame ?? newFrame
     }
-    func windowDidResize(_ notification: Notification) { writeRuntimeStatus() }
+    func windowDidResize(_ notification: Notification) { layoutBottomHUD(); writeRuntimeStatus() }
     func windowDidMove(_ notification: Notification) { writeRuntimeStatus() }
     func smokeTest() {
         let output = URL(fileURLWithPath:CommandLine.arguments.drop(while:{$0 != "--smoke-test"}).dropFirst().first ?? "/tmp/asteroid-squadron-smoke.png")
@@ -1485,6 +1537,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate {
         stats["soundtrackPlaying"] = soundtrack.isPlaying
         stats["soundtrackCues"] = soundtrack.track?.analysis.cues.count ?? 0
         stats["soundtrackCuts"] = battle.director.soundtrackCuts
+        stats["atlantisSiegeQueued"] = battle.manualAtlantisSiegeQueued
         if let data = try? JSONSerialization.data(withJSONObject:stats,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:output.deletingPathExtension().appendingPathExtension("json")) }
     }
 }

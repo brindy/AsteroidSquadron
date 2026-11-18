@@ -81,6 +81,7 @@ extension Dogfight {
         next.acesEmerged = acesEmerged
         next.longestEncounterStreak = longestEncounterStreak
         next.nextAtlantisEncounter = untilAtlantis
+        next.manualAtlantisSiegeQueued = manualAtlantisSiegeQueued
         next.atlantisRandom = atlantisRandom
         next.automatic = automatic
         next.cameraIndex = cameraIndex

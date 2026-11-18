@@ -99,19 +99,20 @@ On launch, the app starts `/usr/bin/caffeinate -d -i -w <app-pid>`. This prevent
 | Space / P | Pause or resume flight (keeps awake) |
 | Flight → Pause When Unfocused | Automatically pause when the simulation window loses focus. Enabled by default and saved across launches. |
 | ⌘O / Soundtrack → Choose Audio File | Load, analyse, and loop a local soundtrack |
-| Soundtrack → Remove Soundtrack | Stop playback and return to the action-only camera |
+| × on the waveform / Soundtrack → Remove Soundtrack | Stop playback and return to the action-only camera |
 | H / U | Hide or show overlay |
 | K | Toggle keep awake |
 | J | Toggle 30 / 60 fps |
-| R | Generate a fresh random arena |
+| R | Generate a fresh random arena and restart the soundtrack |
 | T | Wipe into a random new sector immediately |
+| S | Queue an Atlantis siege for the next victory |
 | B | Generate another biome in a planet sector |
 | ? | Help |
 | ⌘Q | Quit and release this app's keep-awake assertions |
 
 The overlay dims after nine seconds without mouse movement; move the pointer to restore it. Window size and position are remembered.
 
-The soundtrack is optional and selected for the current session. Choose an MP3, WAV, M4A, AIFF, FLAC, CAF, or another audio format macOS can decode. Analysis runs locally in the background. The automatic camera uses changes in energy, bass, and attack relative to the surrounding music, so quiet notes can count and dense percussion still leaves time to hold a shot. When a strong cue is close to a planned arrival, the scheduler can hold the arrival for up to 1.8 seconds before staging it. The carrier sequence, fighter handoff, sector changes and Atlantis shots take priority over music cuts. Flight pause also pauses playback. Turn off **Automatic Camera Cuts** to listen with manual camera control.
+The soundtrack is optional and selected for the current session. Choose an MP3, WAV, M4A, AIFF, FLAC, CAF, or another audio format macOS can decode. Analysis runs locally in the background. The waveform at the bottom shows playback progress. The automatic camera uses changes in energy, bass, and attack relative to the surrounding music, so quiet notes can count and dense percussion still leaves time to hold a shot. When a strong cue is close to a planned arrival, the scheduler can hold the arrival for up to 1.8 seconds before staging it. The carrier sequence, fighter handoff, sector changes and Atlantis shots take priority over music cuts. Flight pause also pauses playback. Turn off **Automatic Camera Cuts** to listen with manual camera control.
 
 ## Verification
 

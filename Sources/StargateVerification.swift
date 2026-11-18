@@ -131,6 +131,25 @@ func verifyStargate(renderDirectory: URL? = nil) {
                   openingEncounters.allSatisfy(Atlantis.firstEncounterWindow.contains),
                   "Normal Atlantis arrivals did not vary within the opening window")
 
+    let requestedSiege = Dogfight(seed:7306,initialFactions:[.tauri,.wraith],initialArrivals:false,
+                                  firstAtlantisEncounter:nil,sectorWaveLimit:1)
+    requestedSiege.paused = true
+    stargateCheck(requestedSiege.queueAtlantisSiege(),"A siege could not be queued while paused")
+    requestedSiege.paused = false
+    requestedSiege.updateReinforcements(0)
+    stargateCheck(requestedSiege.manualAtlantisSiegeQueued && !requestedSiege.fleetTruce,
+                  "A queued siege interrupted a two-faction encounter")
+    let nextSector = requestedSiege.followingSector(backdrop:(kind:.planet,waves:10))
+    stargateCheck(nextSector.manualAtlantisSiegeQueued,"A sector change lost the queued siege")
+    for fighter in requestedSiege.fighters where fighter.side==1 { requestedSiege.destroy(fighter) }
+    requestedSiege.updateReinforcements(0)
+    stargateCheck(requestedSiege.atlantisAttackingSide==0 && requestedSiege.encountersCompleted==1 &&
+                  requestedSiege.atlantisTopUpPending && requestedSiege.sectorDeparture == nil &&
+                  !requestedSiege.manualAtlantisSiegeQueued && requestedSiege.fleetRequests.isEmpty,
+                  "The queued siege did not claim the next victory with a top-up")
+    stargateCheck(!requestedSiege.queueAtlantisSiege(),"Another siege was queued during siege preparation")
+    print("PASS: A manual siege queues while paused, survives a sector transition, and claims the next victory before departure.")
+
     func prepareSoloSiege(_ faction: Faction, seed: UInt64) -> Dogfight {
         let opponent: Faction = faction == .wraith ? .tauri : .wraith
         let b = Dogfight(seed:seed,initialFactions:[faction,opponent],initialArrivals:false,firstAtlantisEncounter:1...1)

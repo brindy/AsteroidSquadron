@@ -301,6 +301,12 @@ extension Dogfight {
     var atlantisSiegeActive: Bool { atlantis?.intact == true }
     var fleetTruce: Bool { atlantisAttackingSide != nil }
 
+    @discardableResult func queueAtlantisSiege() -> Bool {
+        guard !fleetTruce, !manualAtlantisSiegeQueued else { return false }
+        manualAtlantisSiegeQueued = true
+        return true
+    }
+
     private func startAtlantisSiege(attackingSide: Int) {
         // Stage off to one side of the planet-facing gap so later fighter
         // deployments can still use the lanes on either side of the sightline.

@@ -30,14 +30,16 @@ extension Dogfight {
         guard atlantisAttackingSide == nil, sectorDeparture == nil, !pendingSides.contains(side), roster.allSatisfy({$0.state == .destroyed}),
               !carriers.contains(where:{$0.side == side}) else { return }
         let winner = 1-side
-        if let limit = sectorWaveLimit, encountersCompleted+1>=limit, sideCount(winner)>0 {
+        if !manualAtlantisSiegeQueued, let limit = sectorWaveLimit, encountersCompleted+1>=limit, sideCount(winner)>0 {
             guard carriers.isEmpty, arrivingCount == 0 else { return }
             creditEncounter(survivingSides:[winner],replenish:false)
             scheduleSectorDeparture(for:winner)
             return
         }
-        if let next = nextAtlantisEncounter, sideCount(winner)>0, encountersCompleted+1>=next {
+        let siegeDue = nextAtlantisEncounter.map { encountersCompleted+1 >= $0 } ?? false
+        if sideCount(winner)>0, manualAtlantisSiegeQueued || siegeDue {
             creditEncounter(survivingSides:[winner],replenish:false)
+            manualAtlantisSiegeQueued = false
             atlantisAttackingSide = winner
             atlantisTopUpPending = true
             return
