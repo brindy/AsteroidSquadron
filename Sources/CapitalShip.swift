@@ -79,13 +79,18 @@ final class Carrier {
     let sternOffset: Float
     var announced = false
     var departing = false
-    var departureAge: Float { lastLaunchAge+0.18 }
+    var departureAge: Float { faction == .shadow ? CapitalJump.shadowDepartureAge(after:lastLaunchAge) : lastLaunchAge+0.18 }
     var lastLaunchAge: Float { 2.5+Float(max(0,squadron.count-1))*0.35 }
-    var departureDuration: Float { faction == .earth ? 0.7 : (faction == .shadow ? 2.6 : (faction.usesBlinkFTL ? 0.65 : 1.5)) }
+    var departureDuration: Float {
+        if faction == .shadow { return CapitalJump.exitTravelDuration+CapitalJump.exitClosingDuration }
+        return faction == .earth ? 0.7 : (faction.usesBlinkFTL ? 0.65 : 1.5)
+    }
     let scale: Float = 6
     var blinkEntered = false
     var blinkExited = false
-    var arrivalDuration: Float { faction.usesJumpWindow ? 2.1 : (faction.usesBlinkFTL ? 0.85 : 1.4) }
+    var arrivalDuration: Float { faction.usesJumpWindow ? CapitalJump.arrivalDuration : (faction.usesBlinkFTL ? 0.85 : 1.4) }
+    var arrivalGatePosition: V3 { origin-forward*worldRadius*0.75 }
+    var departureGatePosition: V3 { origin+forward*worldRadius*1.6 }
     var cameraBounds: V3 {
         switch faction { case .colonial: return V3(82,30,136); case .cylon: return V3(158,30,158); case .shadow: return V3(180,70,170); case .earth: return portalOnly ? V3(37,37,1) : V3(55,36,135); case .rebel: return V3(65,34,131); case .tauri: return V3(79,49,160); case .goauld: return V3(129,68,120); case .wraith: return V3(101,50,162); default: return V3(77,44,130) }
     }

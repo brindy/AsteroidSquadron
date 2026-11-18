@@ -33,8 +33,25 @@ private func verifyShadowBays(_ ship: Carrier) {
     print("PASS: Both Shadow bays are open from the staging point past the spine tips.")
 }
 
+private func verifyShortShadowVisit() {
+    let battle = Dogfight(seed:1818,initialArrivals:false,firstAtlantisEncounter:nil)
+    let ship = Carrier(faction:.shadow,origin:V3(120,70,-900),forward:unit(V3(0.7,0,-0.5)),start:0,squadron:[0])
+    let window = ship.jumpWindow!
+    let beginsOpening = ship.departureAge-CapitalJump.exitOpeningDuration
+    babylonCheck(beginsOpening>CapitalJump.arrivalClosed,"The Shadow exit aperture opens before the entry aperture closes")
+    _ = battle.updateJumpWindow(ship,age:(CapitalJump.arrivalClosed+beginsOpening)*0.5)
+    babylonCheck(window.node.isHidden && !ship.node.isHidden,"The gate did not close between a short visit's two openings")
+    let halfway = battle.updateJumpWindow(ship,age:beginsOpening+CapitalJump.exitOpeningDuration*0.5)
+    babylonCheck(window.openness>0.49 && window.openness<0.51,"A short Shadow visit skipped the exit aperture opening")
+    babylonCheck(halfway == ship.origin,"The Shadow carrier moved before the exit aperture was open")
+    let transit = battle.updateJumpWindow(ship,age:ship.departureAge+0.25)
+    babylonCheck(window.openness == 1 && transit != ship.origin,"The Shadow carrier started its exit through a partially opened aperture")
+    print("PASS: A one-fighter Shadow visit closes the entry gate, opens the exit gate fully, and then accelerates.")
+}
+
 func verifyBabylon() {
     verifyJumpClipping()
+    verifyShortShadowVisit()
     for faction in [Faction.earth,.shadow] {
         let b = Dogfight(seed:1818,initialFactions:[faction,.rebel],initialArrivals:false)
         b.rocks.removeAll()
@@ -59,6 +76,14 @@ func verifyBabylon() {
                     babylonCheck(ship.jumpClipper?.plane != nil,"Shadow transit lost its clipping plane")
                 } else if age<ship.departureAge-0.65 {
                     babylonCheck(ship.jumpClipper?.plane == nil,"Normal-space Shadow hull remained clipped")
+                }
+                if (1.34...1.9).contains(age) {
+                    let view = unit(b.cameraPosition-ship.arrivalGatePosition)
+                    babylonCheck(simd_dot(view,ship.forward)>0.35,"Arrival showed the Shadow aperture edge-on or from behind")
+                }
+                if (1.05...1.62).contains(age-ship.departureAge) {
+                    let view = unit(b.cameraPosition-ship.departureGatePosition)
+                    babylonCheck(simd_dot(view,ship.forward)<(-0.35),"Departure showed the Shadow aperture edge-on or from behind")
                 }
             }
             if faction == .earth {
@@ -168,6 +193,12 @@ func renderBabylonReview(directory: URL) {
             let beats: [(String,Float)] = [("window",0.8),("emergence",1.6),("launch-close",2.6),("squadron",4.3),("departure",ship.departureAge+0.8),("handoff",ship.departureAge+ship.departureDuration+0.8)]
             for (name,at) in beats where age>=at && captured.insert(name).inserted { save(faction.rawValue+"-"+name,time:b.time) }
             if faction == .shadow, let window = ship.jumpWindow {
+                let transitBeats: [(String,Float)] = [("first-spines",1.41),
+                    ("exit-opening",ship.departureAge-0.24),("exit-crossing",ship.departureAge+1.37),
+                    ("exit-cleared",ship.departureAge+1.85)]
+                for (name,at) in transitBeats where age>=at && captured.insert(name).inserted {
+                    save("shadow-\(name)",time:b.time)
+                }
                 for (name,at) in [("before-emergence",Float(1.05)),("crossing",1.6)] where age>=at && captured.insert(name).inserted {
                     let position = b.camera.simdPosition, orientation = b.camera.simdOrientation
                     let right = unit(simd_cross(ship.forward,V3(0,1,0)))

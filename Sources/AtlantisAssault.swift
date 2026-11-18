@@ -167,7 +167,7 @@ extension Dogfight {
             if assault.finished { return }
         } else {
             let age = time-ship.start
-            if let window = ship.jumpWindow, age<2.4 {
+            if let window = ship.jumpWindow, age<CapitalJump.arrivalClosed {
                 ship.node.simdPosition = emergeThroughJumpWindow(ship,age:age,window:window)
             } else if !ship.faction.usesBlinkFTL && ship.jumpWindow == nil && age<ship.arrivalDuration {
                 ship.node.simdPosition = capitalHyperspaceEntry(ship,age:age)

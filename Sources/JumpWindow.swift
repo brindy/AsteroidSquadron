@@ -2,6 +2,19 @@ import AppKit
 import SceneKit
 import simd
 
+enum CapitalJump {
+    static let entryOpens: Float = 0.85
+    static let arrivalDuration: Float = 2.1
+    static let arrivalClosed: Float = 2.4
+    static let exitOpeningDuration: Float = 0.65
+    static let exitTravelDuration: Float = 2
+    static let exitClosingDuration: Float = 0.6
+
+    static func shadowDepartureAge(after launch: Float) -> Float {
+        max(launch+0.18,arrivalClosed+0.10+exitOpeningDuration)
+    }
+}
+
 // The dark disk is the visual aperture; travelling craft also have their own
 // clipping planes. Blue eddies need no image textures or particle nodes.
 private let jumpWindowFragment = """
@@ -58,11 +71,12 @@ final class JumpWindow {
 extension Dogfight {
     func emergeThroughJumpWindow(_ ship: Carrier, age: Float, window: JumpWindow) -> V3 {
         let radius = ship.worldRadius
-        let travel = max(0,min(1,(age-0.85)/1.25))
+        let travel = max(0,min(1,(age-CapitalJump.entryOpens)/(CapitalJump.arrivalDuration-CapitalJump.entryOpens)))
         let position = ship.origin-ship.forward*(radius*2.6*(1-travel))
-        ship.node.isHidden = age<0.85
-        let portal = ship.origin-ship.forward*radius*0.75
-        window.update(time:time,position:portal,openness:min(age/0.85,(2.4-age)/0.3))
+        ship.node.isHidden = age<CapitalJump.entryOpens
+        let portal = ship.arrivalGatePosition
+        let closing = (CapitalJump.arrivalClosed-age)/(CapitalJump.arrivalClosed-CapitalJump.arrivalDuration)
+        window.update(time:time,position:portal,openness:min(age/CapitalJump.entryOpens,closing))
         if age<ship.arrivalDuration { ship.jumpClipper?.setPlane(origin:portal,normal:ship.forward) }
         else { ship.jumpClipper?.clear() }
         return position
@@ -82,20 +96,21 @@ extension Dogfight {
             return ship.origin
         }
         let radius = ship.worldRadius
-        let departureOpening = ship.departureAge-0.65
+        let departureOpening = ship.departureAge-CapitalJump.exitOpeningDuration
         var position = ship.origin
-        if age<2.4 {
+        if age<CapitalJump.arrivalClosed {
             return emergeThroughJumpWindow(ship,age:age,window:window)
         } else if age<departureOpening {
             ship.jumpClipper?.clear()
             ship.node.isHidden = false
             window.update(time:time,position:ship.origin,openness:0)
         } else {
-            let t = max(0,min(1,(age-ship.departureAge)/2.0))
+            let t = max(0,min(1,(age-ship.departureAge)/CapitalJump.exitTravelDuration))
             position += ship.forward*radius*3.0*t*t
             ship.node.isHidden = t>=1
-            let open = min((age-departureOpening)/0.65,(ship.departureAge+2.6-age)/0.6)
-            let portal = ship.origin+ship.forward*radius*1.6
+            let open = min((age-departureOpening)/CapitalJump.exitOpeningDuration,
+                           (ship.departureAge+ship.departureDuration-age)/CapitalJump.exitClosingDuration)
+            let portal = ship.departureGatePosition
             window.update(time:time,position:portal,openness:open)
             // Invert the plane on exit: crossed geometry is now in hyperspace.
             ship.jumpClipper?.setPlane(origin:portal,normal:-ship.forward)

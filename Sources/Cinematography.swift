@@ -365,7 +365,7 @@ final class CinematicDirector {
 
     private func landmarkReveal(origin: V3, subject: V3, points: [V3], distance: Float,
                                  age: Float, cue: Float, elevation: Float = 0.24,
-                                 approach: V3? = nil, in b: Dogfight)
+                                 approach: V3? = nil, cameraOffset: V3? = nil, in b: Dogfight)
         -> (position: V3, look: V3, fov: Float, roll: Float) {
         let up = V3(0,1,0)
         let outward = unit(b.landmarkPosition-origin)
@@ -373,7 +373,8 @@ final class CinematicDirector {
         let lateral = simd_dot(approach ?? origin,right)>0 ? -right : right
         let lateralOffset: Float = approach == nil ? 0.32 : 0.92
         let range = distance/max(0.58,min(1,b.viewportAspect))
-        let position = origin+range*(-outward+lateral*lateralOffset+up*elevation)-lateral*distance*0.028*age
+        let offset = cameraOffset ?? (-outward+lateral*lateralOffset+up*elevation)
+        let position = origin+range*offset-lateral*distance*0.028*age
         let shipSightline = unit(subject-position)
         let landmarkSightline = unit(b.landmarkPosition-position)
         // The operator holds the wide frame until the jump, pans a beat late,
@@ -409,6 +410,7 @@ final class CinematicDirector {
         var points = ship.framingPoints.map { ship.origin+ship.node.simdOrientation.act($0*ship.scale) }
         var distance = max(950,ship.worldRadius*1.7)
         var cue: Float = ship.faction.usesBlinkFTL ? ship.arrivalDuration : 0.96
+        var cameraOffset: V3?
         if let window = ship.jumpWindow {
             let portal = window.node.simdPosition
             let right = unit(simd_cross(ship.forward,V3(0,1,0)))
@@ -419,15 +421,20 @@ final class CinematicDirector {
             subject = mix(portal,ship.origin,0.4)
             distance = max(710,window.radius*2.15)
             cue = ship.jumpClipper == nil ? 0.38 : 1.4
+            if ship.faction == .shadow {
+                let side: Float = simd_dot(ship.origin-b.landmarkPosition,right)<0 ? -1 : 1
+                // Hold a three-quarter view from normal space so the first
+                // spines and the opening remain in the same silhouette.
+                cameraOffset = ship.forward*0.54+right*(side*0.91)+V3(0,-0.24,0)
+            }
         } else if let trail = ship.hyperspaceTrail, age<ship.arrivalDuration, !trail.isHidden {
             points.append(trail.point.simdPosition)
             subject = mix(subject,trail.point.simdPosition,0.14)
             cue = ship.arrivalDuration*0.65
         }
-        let elevation: Float = ship.faction == .shadow ? -0.25 : 0.24
         return landmarkReveal(origin:ship.origin,subject:subject,points:points,distance:distance,
-                               age:age,cue:cue,elevation:elevation,
-                               approach:ship.hyperspaceTrail == nil ? nil : ship.forward,in:b)
+                               age:age,cue:cue,approach:ship.hyperspaceTrail == nil ? nil : ship.forward,
+                               cameraOffset:cameraOffset,in:b)
     }
 
     private func atlantisReveal(_ city: Atlantis, age: Float, in b: Dogfight)
@@ -501,7 +508,10 @@ final class CinematicDirector {
         let pull = linear*linear*(3-2*linear)
         let focus = mix(heroPosition,group,pull)
         let focusVelocity = mix(hero.active ? hero.velocity : .zero,groupVelocity,pull)
-        let forwardOffset: Float = ship.faction == .shadow ? 30 : 58
+        // During the pullback, move aft of the exit plane while the carrier
+        // continues to recede behind the fighter group in the same shot.
+        let exitAngle = hyperspaceRamp(age,from:2.85,to:ship.departureAge+0.2)
+        let forwardOffset: Float = ship.faction == .shadow ? 30-80*exitAngle : 58
         let lateralOffset: Float = ship.faction == .shadow ? 70 : 38
         let revealFromAbove = ship.faction == .goauld || ship.faction == .tauri
         let elevation = -18+(revealFromAbove ? pull*45 : 0)
@@ -520,7 +530,7 @@ final class CinematicDirector {
         if ship.faction == .shadow, let window = ship.jumpWindow {
             // Reserve screen space before the departure aperture opens. The
             // lateral launch angle prevents its dark core hiding the capital.
-            let portal = ship.origin+ship.forward*ship.worldRadius*1.6
+            let portal = ship.departureGatePosition
             for x: Float in [-1,1] { for y: Float in [-1,1] {
                 framing.append(portal+right*x*window.radius+up*y*window.radius)
             } }
