@@ -59,6 +59,7 @@ cleanup_release() {
 trap cleanup_release EXIT
 git archive "$source_commit" | tar -x -C "$release_source"
 "$release_source/scripts/build.sh" --output "$release_app" --sign "$signing_identity"
+"$release_source/scripts/verify-sparkle.sh" "$release_app" > "$release_dir/sparkle-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-pursuit > "$release_dir/flight-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-babylon > "$release_dir/arrival-checks.log" 2>&1
 "$release_app/Contents/MacOS/AsteroidSquadron" --verify-veterans > "$release_dir/veteran-checks.log" 2>&1
@@ -136,6 +137,7 @@ entitlements = subprocess.run(['codesign','--display','--entitlements','-',str(a
 report = {
     'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'],
     'bundleID': info['CFBundleIdentifier'], 'sourceCommit': revision,
+    'sparkle': {'feedURL':info.get('SUFeedURL'),'publicKey':info.get('SUPublicEDKey'),'requiresSignedFeed':info.get('SURequireSignedFeed'),'verifiesArchiveBeforeExtraction':info.get('SUVerifyUpdateBeforeExtraction')},
     'icon': {'name':info.get('CFBundleIconName'),'file':info.get('CFBundleIconFile'),'nativeCatalog':(app/'Contents/Resources/Assets.car').is_file()},
     'team': fields.get('TeamIdentifier'),
     'entitlements': plistlib.loads(entitlements) if entitlements.strip() else {},

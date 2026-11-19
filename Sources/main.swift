@@ -920,6 +920,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemVa
     private var cockpitOverlay: CockpitOverlay!
     var battle: Dogfight!
     let awake = KeepAwake()
+    private let updates = AppUpdates()
     private let soundtrack = SoundtrackPlayback()
     private var soundtrackTrackID: UUID?
     private var shownSoundtrackProfile = SoundtrackProfile.default
@@ -1033,6 +1034,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemVa
         soundtrack.onChange = { [weak self] in self?.updateSoundtrackMenu() }
         soundtrack.onError = { [weak self] url,error in self?.showSoundtrackError(url,error:error) }
         recording.onStateChange = { [weak self] in self?.updateRecordingControls() }
+        updates.canInstallUpdate = { [weak self] in self?.recording.isBusy == false }
         updateCameraHUD()
         _ = awake.start(); updateStatus()
         cockpitOverlay.setFaction(battle.director.cockpitFaction)
@@ -1043,6 +1045,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemVa
         window.makeKeyAndOrderFront(nil); window.makeFirstResponder(view)
         NSApp.activate(ignoringOtherApps:true)
         updatePauseState()
+        updates.start()
         if CommandLine.arguments.contains("--fullscreen") { window.toggleFullScreen(nil) }
         if CommandLine.arguments.contains("--smoke-test") {
             DispatchQueue.main.asyncAfter(deadline:.now()+3) { [weak self] in self?.smokeTest() }
@@ -1066,6 +1069,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemVa
         let appItem = NSMenuItem(); bar.addItem(appItem)
         let menu = NSMenu()
         menu.addItem(withTitle:"About Asteroid Squadron",action:#selector(about),keyEquivalent:"")
+        menu.addItem(updates.checkForUpdatesMenuItem())
+        menu.addItem(updates.automaticChecksMenuItem())
         menu.addItem(.separator())
         awakeItem = menu.addItem(withTitle:"Keep Computer & Display Awake",action:#selector(toggleAwake),keyEquivalent:"k")
         menu.addItem(.separator())
@@ -1091,7 +1096,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemVa
         recordingItem = menuView.addItem(withTitle:recording.menuTitle,action:#selector(toggleRecording),keyEquivalent:"")
         menuView.addItem(withTitle:"Discard Unsaved Recording",action:#selector(discardRecording),keyEquivalent:"")
         viewItem.submenu = menuView
-        for item in menu.items+menuView.items { if item.action != nil && item.action != #selector(NSApplication.hide(_:)) && item.action != #selector(NSApplication.terminate(_:)) { item.target = self } }
+        for item in menu.items+menuView.items { if item.action != nil && item.target == nil && item.action != #selector(NSApplication.hide(_:)) && item.action != #selector(NSApplication.terminate(_:)) { item.target = self } }
         let soundtrackItem = NSMenuItem(); bar.addItem(soundtrackItem)
         let musicMenu = NSMenu(title:"Soundtrack")
         musicMenu.autoenablesItems = false
@@ -1164,6 +1169,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemVa
 
     private func updateRecordingControls() {
         recordingItem.title = recording.menuTitle
+        updates.resumePendingUpdateIfReady()
         if let size = recording.lockedFrameSize, unlockedSizeLimits == nil, !window.styleMask.contains(.fullScreen) {
             unlockedSizeLimits = (window.minSize,window.maxSize)
             window.minSize = size

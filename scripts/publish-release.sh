@@ -55,6 +55,11 @@ if $check_only; then
     exit 0
 fi
 [[ -f "$release_notes" ]] || { print -u2 'Release notes are missing.'; exit 1; }
+sparkle_assets=()
+if /usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$release_app/Contents/Info.plist" >/dev/null 2>&1; then
+    ./scripts/prepare-sparkle-update.sh "$release_tag"
+    sparkle_assets=("$release_dir/sparkle/appcast.xml")
+fi
 gh auth status
 if gh release view "$release_tag" --repo brindy/AsteroidSquadron >/dev/null 2>&1; then
     print -u2 'A release already exists. Existing releases and assets are never replaced.'
@@ -68,4 +73,5 @@ else
     git tag -a "$release_tag" -m "Asteroid Squadron $release_version" "$source_commit"
 fi
 git push origin "refs/tags/$release_tag"
-gh release create "$release_tag" "$release_dmg" "$release_zip" "$release_dir/SHA256SUMS" --verify-tag --repo brindy/AsteroidSquadron --title "Asteroid Squadron $release_version" --notes-file "$release_notes"
+gh release create "$release_tag" "$release_dmg" "$release_zip" "$release_dir/SHA256SUMS" "${sparkle_assets[@]}" --verify-tag --repo brindy/AsteroidSquadron --title "Asteroid Squadron $release_version" --notes-file "$release_notes"
+if (( ${#sparkle_assets[@]} )); then ./scripts/publish-sparkle-feed.sh "$release_tag"; fi

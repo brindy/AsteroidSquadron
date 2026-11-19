@@ -1,6 +1,6 @@
 # Asteroid Squadron
 
-A standalone macOS app: an endless crossover dogfight between Star Wars, the reimagined Battlestar Galactica, Babylon 5 and Stargate in a procedural 3D asteroid belt. An action-directed camera system, faction-specific weapons, turbulent explosions that cool into smoke, formation arrivals, capital-ship hangar launches, drifting volumetric gas, rotating sector landmarks, and a quiet cinematic overlay. All ship meshes, geometry, density fields, and textures are generated locally. No dependencies, downloads, or network access.
+A standalone macOS app: an endless crossover dogfight between Star Wars, the reimagined Battlestar Galactica, Babylon 5 and Stargate in a procedural 3D asteroid belt. An action-directed camera system, faction-specific weapons, turbulent explosions that cool into smoke, formation arrivals, capital-ship hangar launches, drifting volumetric gas, rotating sector landmarks, and a quiet cinematic overlay. All ship meshes, geometry, density fields, and textures are generated locally. Sparkle provides optional software update checks.
 
 Every launch chooses a fresh random seed for asteroid placement and shapes, cloud positions and density, landmark placement, flight orientation, and the initial pair of opposing factions. **R** generates another arena and faction pairing without interrupting keep-awake. For a reproducible run, launch with `--seed 42` (any unsigned 64-bit decimal integer).
 
@@ -61,6 +61,8 @@ The gas clouds use ray marching through three-dimensional procedural noise insid
 See [GitHub Releases](https://github.com/brindy/AsteroidSquadron/releases) for published Mac builds. Use the Apple Silicon DMG, drag **Asteroid Squadron** into **Applications**, then launch it. Release downloads require an Apple Silicon Mac running macOS 13 or newer. The release script signs with Developer ID, notarizes and staples the app and DMG, and publishes a ZIP alternative and SHA-256 checksums. Building, signing and notarization run locally; GitHub hosts the source and releases.
 
 Maintainers: see [the release guide](docs/RELEASING.md) for Keychain setup and the one-command release workflow.
+
+From version 1.34, choose **Asteroid Squadron → Check for Updates…** to install newer releases. The same menu lets you enable automatic checks. The signed update feed lives in this repository, and update downloads come from GitHub Releases. Install version 1.34 once to receive future updates through the app.
 
 ## Run
 

@@ -63,7 +63,19 @@ The build helper uses a Developer ID certificate when exactly one is installed, 
 
 `package.sh` only creates and verifies a disk image. It does **not** notarize it. Local ad hoc builds are for testing, not the signed public download.
 
-All building, signing, notarization, verification and packaging run locally. There are no GitHub Actions workflows or cloud signing secrets. GitHub hosts the source repository and published releases only. The local release command runs native flight checks, rendered GPU arrival checks, and the veteran/skybox checks before notarization. Intel/Rosetta builds and checks are not part of the release process.
+All building, signing, notarization, verification and packaging run locally. GitHub hosts the source, signed update feed and published releases. The local release command runs native flight checks, rendered GPU arrival checks, and the veteran/skybox checks before notarization. Intel/Rosetta builds and checks are not part of the release process.
+
+## Sparkle updates
+
+The build fetches the checksum-pinned Sparkle distribution with `scripts/fetch-sparkle.sh`, embeds its Apple Silicon framework and helpers, and signs each nested component before signing the app. The app requires signed update archives and a signed appcast. `Resources/SparklePublicKey.txt` contains the public key. The private key belongs in Keychain under Sparkle's `asteroid-squadron` account.
+
+Publishing a new release prepares and verifies its signed feed with `scripts/prepare-sparkle-update.sh`. After GitHub has the public download, `scripts/publish-sparkle-feed.sh` commits and pushes `app-updates/asteroid-squadron/appcast.xml` to `main`. The release tag continues to identify the exact app source commit. The later feed commit publishes the download signature and release notes. This preserves the existing update entries so future releases retain their history.
+
+If the GitHub release succeeds but feed publication is interrupted, finish with `./scripts/publish-sparkle-feed.sh v<VERSION>`. This reuses the prepared signed feed and the existing release. The feed is served at `https://raw.githubusercontent.com/brindy/AsteroidSquadron/main/app-updates/asteroid-squadron/appcast.xml` and can take a short time to refresh in GitHub's cache.
+
+The signing key has a backup in iCloud Keychain with account `asteroid-squadron` and service `https://sparkle-project.org`. It was copied using Keychain Access while keeping the working login-keychain item. iCloud Passwords & Keychain must be enabled for synchronization. Propagation to a second device has not been checked.
+
+On a new signing Mac, use Keychain Access to copy that iCloud entry into the login keychain once. Sparkle's tools read the login keychain. Run `bin/generate_keys --account asteroid-squadron -p` and check that its public key matches `Resources/SparklePublicKey.txt` before releasing. The release helper also checks this match. Generate a new key only when intentionally setting up or rotating signing, using `bin/generate_keys --account asteroid-squadron`. Never export the private key into the repository or pass it as a command-line argument.
 
 Keep build products, `.p12` certificates, `.p8` keys, passwords and notarization receipts out of Git. The `.gitignore` covers the standard paths and credential extensions. Never commit an exported private key to set up signing.
 
