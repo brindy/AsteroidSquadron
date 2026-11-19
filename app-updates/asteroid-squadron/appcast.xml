@@ -1,34 +1,48 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<!-- sparkle-sign-warning:
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
--->
-<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
-    <channel>
-        <title>Asteroid Squadron Updates</title>
-        <link>https://github.com/brindy/AsteroidSquadron/releases</link>
-        <description>Signed updates for Asteroid Squadron on Apple Silicon Macs.</description>
-        <language>en</language>
-        <item>
-            <title>1.34</title>
-            <pubDate>Thu, 19 Nov 2026 01:41:55 +0000</pubDate>
-            <link>https://github.com/brindy/AsteroidSquadron/releases/tag/v1.34</link>
-            <sparkle:version>37</sparkle:version>
-            <sparkle:shortVersionString>1.34</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<h2>Asteroid Squadron 1.34</h2>
-<ul>
-<li>Added Sparkle software updates. Choose <strong>Asteroid Squadron → Check for Updates…</strong> to check manually, or enable <strong>Check for Updates Automatically</strong>.</li>
-<li>Updates and the GitHub-hosted update feed use Ed25519 signatures, alongside Developer ID signing and Apple notarization.</li>
-<li>Update installation waits until an active recording is saved or discarded.</li>
-</ul>
-<p>Install this version once from the DMG or ZIP to enable future in-app updates. Requires an Apple Silicon Mac running macOS 13 or newer.</p>
-]]></description>
-            <enclosure url="https://github.com/brindy/AsteroidSquadron/releases/download/v1.34/Asteroid-Squadron-1.34-arm64.dmg" length="9361947" type="application/octet-stream" sparkle:edSignature="5S1ANW2Pg2vDvfx3Mru4IyFd7Ne0149qQz8rGIH6T8htbupDUu1Fb6j40LRcLUUBHVVtJA3LCJTJcPNR6LWSDA=="/>
-        </item>
-    </channel>
-</rss>
-<!-- sparkle-signatures:
-edSignature: 8ipGFnqY4w2/lXL7bi5u1Dn31nh3/x71gSMoB6sKa227xjAOihYAJcgP1rQ5rMqS2ElVnSIe0fIZ9asyP1JQAw==
-length: 2090
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Asteroid Squadron Updates</title>
+    <link>https://github.com/brindy/AsteroidSquadron/releases</link>
+    <description>Signed updates for Asteroid Squadron on Apple Silicon Macs.</description>
+    <language>en</language>
+    <item>
+      <title>1.35</title>
+      <pubDate>Thu, 19 Nov 2026 01:51:57 +0000</pubDate>
+      <link>https://github.com/brindy/AsteroidSquadron/releases/tag/v1.35</link>
+      <sparkle:version>38</sparkle:version>
+      <sparkle:shortVersionString>1.35</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <description>&lt;h2&gt;Asteroid Squadron 1.35&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;This release exercises the new Sparkle update workflow from version 1.34.&lt;/li&gt;
+&lt;li&gt;Choose &lt;strong&gt;Asteroid Squadron → Check for Updates…&lt;/strong&gt;, then install this update to verify download, installation and relaunch on your Mac.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Requires an Apple Silicon Mac running macOS 13 or newer. The app and disk image are signed and notarized.&lt;/p&gt;
+</description>
+      <enclosure url="https://github.com/brindy/AsteroidSquadron/releases/download/v1.35/Asteroid-Squadron-1.35-arm64.dmg" length="9361929" type="application/octet-stream" sparkle:edSignature="D+QA0PXlQ8cusoCAbp2n0+9amo31YmAFtT3Sl7TtESo7qjFZmS0AFdw4r4tfetNzrfkhQ+qavAmuMeFfsMEcBw=="></enclosure>
+    </item>
+    <item>
+      <title>1.34</title>
+      <pubDate>Thu, 19 Nov 2026 01:41:55 +0000</pubDate>
+      <link>https://github.com/brindy/AsteroidSquadron/releases/tag/v1.34</link>
+      <sparkle:version>37</sparkle:version>
+      <sparkle:shortVersionString>1.34</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <description>&lt;h2&gt;Asteroid Squadron 1.34&lt;/h2&gt;
+&lt;ul&gt;
+&lt;li&gt;Added Sparkle software updates. Choose &lt;strong&gt;Asteroid Squadron → Check for Updates…&lt;/strong&gt; to check manually, or enable &lt;strong&gt;Check for Updates Automatically&lt;/strong&gt;.&lt;/li&gt;
+&lt;li&gt;Updates and the GitHub-hosted update feed use Ed25519 signatures, alongside Developer ID signing and Apple notarization.&lt;/li&gt;
+&lt;li&gt;Update installation waits until an active recording is saved or discarded.&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Install this version once from the DMG or ZIP to enable future in-app updates. Requires an Apple Silicon Mac running macOS 13 or newer.&lt;/p&gt;
+</description>
+      <enclosure url="https://github.com/brindy/AsteroidSquadron/releases/download/v1.34/Asteroid-Squadron-1.34-arm64.dmg" length="9361947" type="application/octet-stream" sparkle:edSignature="5S1ANW2Pg2vDvfx3Mru4IyFd7Ne0149qQz8rGIH6T8htbupDUu1Fb6j40LRcLUUBHVVtJA3LCJTJcPNR6LWSDA=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: aP3HuRUermrrEs/Vui3v9AgKjPZXKxh3Fbssu8UVoAzTaExT2FYLMOdexfu9FrrdjKIazN9fxVn+Jm1cQLKsBA==
+length: 3346
 -->
