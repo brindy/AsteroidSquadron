@@ -1674,7 +1674,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemVa
         showControls()
     }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Asteroid Squadron",.applicationVersion:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "",.credits:NSAttributedString(string:"An endless, procedural crossover starfighter dogfight.\nBuilt for quiet company while your agents work.\n\nUnofficial fan project. Star Wars, Battlestar Galactica, Babylon 5 and Stargate belong to their respective owners.")])
+        AboutWindow.show()
     }
     @objc func showHelp() {
         guard window.attachedSheet == nil else { return }
